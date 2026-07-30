@@ -207,35 +207,59 @@ function pasteShDecrypt(pasteUrl) {
             return null;
         }
         var lines = resp.body.split("\n");
-        var serverKey = (lines[0] || "").trim();
-        if (!serverKey) {
-            host.log("reddit: pasteShDecrypt no serverKey for " + pasteId);
-            return null;
-        }
-        var b64Ciphertext = lines.slice(1).join("").trim();
-        if (!b64Ciphertext) {
-            host.log("reddit: pasteShDecrypt no ciphertext for " + pasteId);
-            return null;
-        }
+        var firstLine = (lines[0] || "").trim();
+        var b64Ciphertext, passwordB64;
 
-        var passwordB64 = host.base64Encode(pasteId + serverKey + clientKey + "https://paste.sh");
-        var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
-        var ctB64 = host.base64Slice(b64Ciphertext, 16, null);
+        if (firstLine.length === 0) {
+            // paste.sh v3 format: leading \n, no server key. PBKDF2 key derivation.
+            host.log("reddit: pasteShDecrypt v3 format for " + pasteId);
+            b64Ciphertext = lines.slice(1).join("").trim();
+            if (!b64Ciphertext) {
+                host.log("reddit: pasteShDecrypt no ciphertext for " + pasteId);
+                return null;
+            }
+            passwordB64 = host.base64Encode(pasteId + clientKey + "https://paste.sh");
+            var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
+            var ctB64 = host.base64Slice(b64Ciphertext, 16, null);
+            try {
+                // PBKDF2-HMAC-SHA512, 1 iteration, 48 bytes (32 key + 16 iv)
+                var keyIvB64 = host.pbkdf2Sha512(passwordB64, saltB64, 1, 48);
+                var keyB64 = host.base64Slice(keyIvB64, 0, 32);
+                var ivB64 = host.base64Slice(keyIvB64, 32, 48);
+                var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+                host.log("reddit: pasteShDecrypt v3 OK len=" + decrypted.length + " for " + pasteId);
+                return decrypted;
+            } catch (e) {
+                host.log("reddit: pasteShDecrypt v3 PBKDF2 failed for " + pasteId + ": " + (e.message || e));
+                return null;
+            }
+        } else {
+            // Legacy format: first line is server key, HMAC-SHA512 key derivation.
+            var serverKey = firstLine;
+            b64Ciphertext = lines.slice(1).join("").trim();
+            if (!b64Ciphertext) {
+                host.log("reddit: pasteShDecrypt no ciphertext for " + pasteId);
+                return null;
+            }
+            passwordB64 = host.base64Encode(pasteId + serverKey + clientKey + "https://paste.sh");
+            var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
+            var ctB64 = host.base64Slice(b64Ciphertext, 16, null);
 
-        try {
-            var message = host.base64Concat(saltB64, ONE_AS_INT32BE_B64);
-            var keyIvB64 = host.hmacSha512(passwordB64, message);
-            var keyB64 = host.base64Slice(keyIvB64, 0, 32);
-            var ivB64 = host.base64Slice(keyIvB64, 32, 48);
-            var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
-            host.log("reddit: pasteShDecrypt OK len=" + decrypted.length + " for " + pasteId);
-            return decrypted;
-        } catch (e) {
-            host.log("reddit: pasteShDecrypt HMAC failed for " + pasteId + ", trying EVP fallback: " + (e.message || e));
-            var fallback = evpBytesToKeyDecrypt(passwordB64, saltB64, ctB64);
-            if (fallback) host.log("reddit: pasteShDecrypt EVP fallback OK len=" + fallback.length + " for " + pasteId);
-            else host.log("reddit: pasteShDecrypt EVP fallback also failed for " + pasteId);
-            return fallback;
+            try {
+                var message = host.base64Concat(saltB64, ONE_AS_INT32BE_B64);
+                var keyIvB64 = host.hmacSha512(passwordB64, message);
+                var keyB64 = host.base64Slice(keyIvB64, 0, 32);
+                var ivB64 = host.base64Slice(keyIvB64, 32, 48);
+                var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+                host.log("reddit: pasteShDecrypt legacy OK len=" + decrypted.length + " for " + pasteId);
+                return decrypted;
+            } catch (e) {
+                host.log("reddit: pasteShDecrypt legacy HMAC failed for " + pasteId + ", trying EVP fallback: " + (e.message || e));
+                var fallback = evpBytesToKeyDecrypt(passwordB64, saltB64, ctB64);
+                if (fallback) host.log("reddit: pasteShDecrypt EVP fallback OK len=" + fallback.length + " for " + pasteId);
+                else host.log("reddit: pasteShDecrypt EVP fallback also failed for " + pasteId);
+                return fallback;
+            }
         }
     } catch (e) {
         host.log("reddit: pasteShDecrypt threw: " + (e.message || e) + " for " + pasteUrl.substring(0, 60));
