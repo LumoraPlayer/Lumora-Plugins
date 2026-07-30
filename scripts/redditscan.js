@@ -616,32 +616,33 @@ function discover(host) {
     host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
 
-    // Test one credential per unique domain. Test ALL unique domains — show every
-    // working one as a candidate the user can add. Does NOT stop after TARGET_WORKING.
-    var seenDomains = {};
+    // Test ALL credentials (no domain dedup — different logins on the same server
+    // can have different channel lineups). Stop testing a domain once one credential
+    // from it passes the Sky Sports check.
+    var acceptedDomains = {};
     var workingCount = 0;
-    var testedCount = 0;
-    host.reportProgress("Testing unique domains…");
+    host.reportProgress("Testing " + unique.length + " credential(s)…");
     for (var i = 0; i < unique.length; i++) {
         var cred = unique[i];
         var domain = domainOf(cred.url);
-        if (seenDomains[domain]) continue;
-        seenDomains[domain] = true;
-        testedCount++;
-
-        host.reportProgress("[" + testedCount + "] Testing " + domain + "…");
+        if (acceptedDomains[domain]) {
+            host.log("reddit: skip[" + (i + 1) + "] domain=" + domain + " already accepted");
+            continue;
+        }
+        host.reportProgress("[" + (i + 1) + "/" + unique.length + "] Testing " + domain + " (" + (cred.username || "no user").substring(0, 15) + ")…");
         var result = testCredential(cred);
-        host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
+        host.log("reddit: test[" + (i + 1) + "] type=" + cred.type + " url=" + domain + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode + " error=" + (result.error || "none"));
 
         if (result.online) {
             host.reportCandidate(toCandidate(result));
             workingCount++;
-            host.log("reddit: test[" + testedCount + "] ACCEPTED working=" + workingCount);
-            host.reportProgress("✓ " + domain + " working (" + workingCount + " found) — tap Add below");
+            acceptedDomains[domain] = true;
+            host.log("reddit: test[" + (i + 1) + "] ACCEPTED domain=" + domain + " working=" + workingCount);
+            host.reportProgress("✓ " + domain + " accepted (" + workingCount + " working) — tap Add below");
         } else {
-            host.reportProgress("✗ " + domain + " offline (" + testedCount + " tested, " + workingCount + " working)");
+            host.reportProgress("✗ " + domain + " skipped (" + (i + 1) + "/" + unique.length + ")");
         }
     }
-    host.log("reddit: tested=" + testedCount + " working=" + workingCount + " domains=" + Object.keys(seenDomains).length);
-    return workingCount === 0 ? "Tested " + testedCount + " domains, none responded" : "Found " + workingCount + " working provider(s)";
+    host.log("reddit: tested all " + unique.length + " credentials, working=" + workingCount + " domains=" + Object.keys(acceptedDomains).length);
+    return workingCount === 0 ? "Tested " + unique.length + " credentials, none had Sky Sports" : "Found " + workingCount + " working provider(s)";
 }
