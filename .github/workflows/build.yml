@@ -24,11 +24,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/torrentplugin-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: torrentplugin-debug
-          path: torrentplugin/app/build/outputs/apk/debug/app-debug.apk
+          path: torrentplugin/app/build/outputs/apk/debug/torrentplugin-debug.apk
           compression-level: 0
 
   redditscan:
@@ -47,11 +49,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/redditscan-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: redditscan-debug
-          path: redditscan/app/build/outputs/apk/debug/app-debug.apk
+          path: redditscan/app/build/outputs/apk/debug/redditscan-debug.apk
           compression-level: 0
 
   animeplugin:
@@ -70,9 +74,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/animeplugin-debug.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: animeplugin-debug
-          path: animeplugin/app/build/outputs/apk/debug/app-debug.apk
+          path: animeplugin/app/build/outputs/apk/debug/animeplugin-debug.apk
           compression-level: 0
