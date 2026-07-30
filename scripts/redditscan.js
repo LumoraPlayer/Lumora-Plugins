@@ -610,7 +610,6 @@ function discover(host) {
     }
     host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
-    host.reportProgress("Testing " + unique.length + " credential(s)…");
 
     // Test one credential per unique domain, at most TARGET_WORKING (5).
     var seenDomains = {};
@@ -622,17 +621,21 @@ function discover(host) {
             candidates.push(unique[i]);
         }
     }
-    host.log("reddit: testing " + candidates.length + " candidates (one per domain)");
+    host.reportProgress("Testing " + candidates.length + " unique provider(s) (" + unique.length + " total, " + candidates.length + " per domain)…");
+    host.log("reddit: testing " + candidates.length + " candidates (one per domain) out of " + unique.length + " total");
     var workingCount = 0;
     for (var i = 0; i < candidates.length; i++) {
-        host.reportProgress("Testing " + domainOf(candidates[i].url) + " (" + (i + 1) + "/" + candidates.length + ")…");
-        var result = testCredential(candidates[i]);
-        host.log("reddit: test[" + (i + 1) + "] type=" + candidates[i].type + " url=" + domainOf(candidates[i].url) + " user=" + (candidates[i].username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
+        var cred = candidates[i];
+        host.reportProgress("Testing " + domainOf(cred.url) + " (" + (i + 1) + "/" + candidates.length + ")…");
+        var result = testCredential(cred);
+        host.log("reddit: test[" + (i + 1) + "] type=" + cred.type + " url=" + domainOf(cred.url) + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
         if (result.online) {
             host.reportCandidate(toCandidate(result));
             workingCount++;
             host.log("reddit: test[" + (i + 1) + "] ACCEPTED working=" + workingCount);
-            host.reportProgress("Found " + workingCount + " working provider(s)…");
+            host.reportProgress("✓ " + domainOf(cred.url) + " working — tap Add below (" + workingCount + "/" + candidates.length + ")");
+        } else {
+            host.reportProgress("✗ " + domainOf(cred.url) + " offline (" + (i + 1) + "/" + candidates.length + ")");
         }
     }
     host.log("reddit: tested=" + candidates.length + " working=" + workingCount);
