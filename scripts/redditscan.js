@@ -477,76 +477,59 @@ function buildM3uUrl(cred) {
     return cred.url;
 }
 
-function testXtreamM3u(cred) {
-    try {
-        var testUrl = buildM3uUrl(cred);
-        var resp = host.httpGet(testUrl, {
+var M3U_RANGE = "bytes=0-5242879"; // big enough to reach Sky Sports/UK rows in an m3u_plus
+
+// The request a credential's live test needs, as { url, headers } for host.httpGetAll. Splitting
+// "build the request" from "evaluate the response" is what lets the discover loop fire a whole
+// batch of provider tests concurrently instead of one blocking GET at a time.
+function buildTestRequest(cred) {
+    if (cred.type === "stalker") {
+        return {
+            url: cred.url.replace(/\/+$/, ""),
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "*/*", "Range": "bytes=0-8191" },
+        };
+    }
+    return {
+        url: buildM3uUrl(cred),
+        headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "*/*",
             "Connection": "close",
-            // Big range, not 8 KB: an m3u_plus lists thousands of channels and the Sky Sports
-            // rows sit far past the first 8 KB, so the old cap made hasSky always false even on
-            // providers that carry them. 5 MB reaches the Sports/UK groups on the panels seen.
-            "Range": "bytes=0-5242879",
-        });
-        var body = resp.body || "";
-        var ok = resp.status >= 200 && resp.status < 300;
-        var isM3u = body.indexOf("#EXTM3U") === 0 || body.indexOf("#EXTINF") === 0 || body.indexOf("#KODIPROP") !== -1;
-        // reachable = these credentials work and the server returned a real playlist, whether or
-        // not it carries Sky Sports. hasSky is the separate content requirement. The caller uses
-        // the two independently: a reachable-but-no-Sky domain is settled (skip it, try another
-        // domain), while an unreachable one leaves the domain open to other logins.
-        var reachable = ok && (isM3u || body.length > 100);
-        var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
-        // Require a UK or EN channel group too. Matched as a whole token inside a group-title
-        // value (UK/EN sit between pipes/spaces in "UK | SPORTS", "EN | MOVIES"), so it doesn't
-        // false-match substrings like ENTERTAINMENT or UKRAINE.
-        var hasUkEn = /group-title="[^"]*\b(?:uk|en)\b/i.test(body);
-        var accepted = reachable && hasSky && hasUkEn;
-        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + body.length + " isM3u=" + isM3u + " reachable=" + reachable + " skySports=" + hasSky + " ukEn=" + hasUkEn + " url=" + testUrl.substring(0, 100));
-        var error = null;
-        if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
-        else if (reachable && !hasSky) error = "No Sky Sports channels";
-        else if (reachable && !hasUkEn) error = "No UK/EN channels";
-        return {
-            credential: cred,
-            online: accepted,
-            reachable: reachable,
-            hasSky: hasSky,
-            hasUkEn: hasUkEn,
-            responseCode: resp.status,
-            error: error,
-        };
-    } catch (e) {
-        host.log("reddit: testXtreamM3u threw: " + (e.message || e) + " url=" + (cred.url || "").substring(0, 60));
-        return { credential: cred, online: false, reachable: false, hasSky: false, hasUkEn: false, responseCode: 0, error: e.message };
-    }
+            "Range": M3U_RANGE,
+        },
+    };
 }
 
-function testStalker(cred) {
-    try {
-        var resp = host.httpGet(cred.url.replace(/\/+$/, ""), {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-            "Accept": "*/*",
-            "Range": "bytes=0-8191",
-        });
-        var head = (resp.body || "").substring(0, 8192);
-        var ok = resp.status >= 200 && resp.status < 300;
-        var valid = ok && head.length > 50;
-        host.log("reddit: testStalker status=" + resp.status + " len=" + head.length + " valid=" + valid + " url=" + cred.url);
-        // Stalker portals aren't M3U, so the Sky Sports content check doesn't apply - a reachable
-        // portal is accepted. hasSky=true keeps it out of the "reachable but no Sky" skip path.
+// Evaluate a pre-fetched response (from host.httpGetAll) for a credential.
+function evalResponse(cred, resp) {
+    resp = resp || { status: 0, body: "" };
+    var body = resp.body || "";
+    var ok = resp.status >= 200 && resp.status < 300;
+    if (cred.type === "stalker") {
+        var valid = ok && body.length > 50;
+        // Stalker portals aren't M3U, so the Sky/UK-EN content checks don't apply - reachable = accepted.
         return { credential: cred, online: valid, reachable: valid, hasSky: true, hasUkEn: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
-    } catch (e) {
-        host.log("reddit: testStalker threw: " + (e.message || e) + " url=" + cred.url);
-        return { credential: cred, online: false, reachable: false, hasSky: false, hasUkEn: false, responseCode: 0, error: e.message };
     }
-}
-
-function testCredential(cred) {
-    if (cred.type === "m3u" || cred.type === "xtream") return testXtreamM3u(cred);
-    if (cred.type === "stalker") return testStalker(cred);
-    return { credential: cred, online: false, responseCode: 0, error: "Unknown type: " + cred.type };
+    var isM3u = body.indexOf("#EXTM3U") === 0 || body.indexOf("#EXTINF") === 0 || body.indexOf("#KODIPROP") !== -1;
+    // reachable = credentials work and the server returned a real playlist, whether or not it
+    // carries the required content. hasSky/hasUkEn are the separate content requirements.
+    var reachable = ok && (isM3u || body.length > 100);
+    var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
+    // UK/EN as a whole token inside a group-title value, so ENTERTAINMENT/UKRAINE don't false-match.
+    var hasUkEn = /group-title="[^"]*\b(?:uk|en)\b/i.test(body);
+    var error = null;
+    if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
+    else if (reachable && !hasSky) error = "No Sky Sports channels";
+    else if (reachable && !hasUkEn) error = "No UK/EN channels";
+    return {
+        credential: cred,
+        online: reachable && hasSky && hasUkEn,
+        reachable: reachable,
+        hasSky: hasSky,
+        hasUkEn: hasUkEn,
+        responseCode: resp.status,
+        error: error,
+    };
 }
 
 function domainOf(url) {
@@ -638,46 +621,62 @@ function discover(host) {
     host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
 
-    // Test credentials until each domain is settled. A domain is settled either way once one of
-    // its logins actually reaches the server: accepted if that login's playlist carries Sky
-    // Sports, or skipped-no-sky if it works but doesn't (no point trying more logins on a server
-    // that plainly doesn't carry the channels). Only a login that fails to reach the server at
-    // all leaves the domain open, so other logins on it still get a turn - one dead credential
-    // shouldn't write off a whole provider.
-    var resolvedDomains = {}; // domain -> "accepted" | "nosky"
-    var workingCount = 0;
-    var noSkyCount = 0;
-    var testedCount = 0;
-    host.reportProgress("Testing " + unique.length + " credential(s)…");
+    // Test providers in parallel, in rounds. Each domain keeps its own ordered list of logins.
+    // A round takes the next untried login from every still-unresolved domain and fires them all
+    // at once via host.httpGetAll (the host fans the network I/O across a thread pool), so a scan
+    // pays roughly one request's latency per round instead of per provider. A domain is settled
+    // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports +
+    // a UK/EN group, else skipped. Only a dead login leaves the domain open for its next login in
+    // the following round - one bad credential shouldn't write off a whole provider.
+    var byDomain = {};
+    var domainOrder = [];
     for (var i = 0; i < unique.length; i++) {
-        var cred = unique[i];
-        var domain = domainOf(cred.url);
-        if (resolvedDomains[domain]) continue;
-        testedCount++;
-        host.reportProgress("[" + testedCount + "] Testing " + domain + " (" + (cred.username || "no user").substring(0, 15) + ")…");
-        var result = testCredential(cred);
-        host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " reachable=" + result.reachable + " code=" + result.responseCode + " error=" + (result.error || "none"));
+        var d0 = domainOf(unique[i].url);
+        if (!byDomain[d0]) { byDomain[d0] = []; domainOrder.push(d0); }
+        byDomain[d0].push(unique[i]);
+    }
+    var resolvedDomains = {}; // domain -> "accepted" | "nosky"
+    var cursor = {};          // domain -> index of its next untried login
+    var workingCount = 0, noSkyCount = 0, testedCount = 0, round = 0;
+    host.reportProgress("Testing " + domainOrder.length + " domain(s)…");
 
-        if (result.online) {
-            host.reportCandidate(toCandidate(result));
-            workingCount++;
-            resolvedDomains[domain] = "accepted";
-            host.log("reddit: test[" + testedCount + "] ACCEPTED domain=" + domain + " working=" + workingCount);
-            host.reportProgress("✓ " + domain + " accepted (" + workingCount + " working) — tap Add below");
-        } else if (result.reachable) {
-            // Creds work but the playlist has no Sky Sports - settle the domain and move to the
-            // next one instead of burning through its other logins.
-            noSkyCount++;
-            resolvedDomains[domain] = "nosky";
-            host.log("reddit: test[" + testedCount + "] NO_SKY domain=" + domain + " - skipping remaining logins on it");
-            host.reportProgress("✗ " + domain + " works but no Sky Sports — trying another");
-        } else {
-            // Dead/rejected login - leave the domain open so its other logins still get tried.
-            host.reportProgress("✗ " + domain + " login failed — trying next");
+    while (true) {
+        // Assemble this round: one next-untried login per unresolved domain.
+        var roundDomains = [], roundCreds = [], roundReqs = [];
+        for (var i = 0; i < domainOrder.length; i++) {
+            var d = domainOrder[i];
+            if (resolvedDomains[d]) continue;
+            var idx = cursor[d] || 0;
+            if (idx >= byDomain[d].length) continue; // exhausted, stays unresolved (dead)
+            cursor[d] = idx + 1;
+            var cred = byDomain[d][idx];
+            roundDomains.push(d); roundCreds.push(cred); roundReqs.push(buildTestRequest(cred));
+        }
+        if (roundReqs.length === 0) break;
+        round++;
+        host.reportProgress("Round " + round + ": testing " + roundReqs.length + " domain(s) in parallel…");
+        var responses = host.httpGetAll(roundReqs);
+
+        for (var j = 0; j < roundCreds.length; j++) {
+            var cred = roundCreds[j], domain = roundDomains[j];
+            var result = evalResponse(cred, responses[j]);
+            testedCount++;
+            host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " online=" + result.online + " reachable=" + result.reachable + " code=" + result.responseCode + " error=" + (result.error || "none"));
+            if (result.online) {
+                host.reportCandidate(toCandidate(result));
+                workingCount++;
+                resolvedDomains[domain] = "accepted";
+                host.reportProgress("✓ " + domain + " accepted (" + workingCount + " working) — tap Add below");
+            } else if (result.reachable) {
+                noSkyCount++;
+                resolvedDomains[domain] = "nosky";
+                host.reportProgress("✗ " + domain + " works but no Sky/UK-EN — skipping");
+            }
+            // else: dead login - domain left open for its next login next round.
         }
     }
     var domainCount = Object.keys(resolvedDomains).length;
-    host.log("reddit: tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount);
+    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount);
     return workingCount === 0
         ? "Tested " + testedCount + " credential(s), none had Sky Sports"
         : "Found " + workingCount + " working provider(s)";

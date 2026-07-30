@@ -236,5 +236,17 @@ function resolve(host, token, season, episode) {
     if (!streamUrl) throw new Error("Senshi episode " + ep + " has no playable sources");
 
     host.reportProgress("Stream ready");
-    return streamUrl;
+    // The CDN (ninstream etc.) hotlink-protects its playlist behind a Referer of the embed host -
+    // without it the player's fetch 403s. Return headers alongside the URL so the host applies
+    // them (verified: Referer https://senshi.live/ flips the playlist 403 -> 200).
+    // Headers as a JSON string, not a nested object: the host reads the resolve return via a
+    // shallow toMap that can drop a nested object, so a string round-trips reliably.
+    return {
+        url: streamUrl,
+        headers: JSON.stringify({
+            "Referer": SENSHI_BASE + "/",
+            "Origin": SENSHI_BASE,
+            "User-Agent": SENSHI_UA,
+        }),
+    };
 }
