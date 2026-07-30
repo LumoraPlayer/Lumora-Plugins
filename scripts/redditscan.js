@@ -14,7 +14,7 @@ PLUGIN = {
 var SUBREDDIT = "IPTV_ZONENEW";
 var CLIENT_IDS = ["ohXpoqrZYub1kg", "NOe2iKrPPzwscA"];
 var OAUTH_UA = "RedditScanPlugin/1.0";
-var MAX_AGE_MS = 24 * 60 * 60 * 1000;
+var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 var TARGET_WORKING = 5;
 
 var PASTE_DOMAINS = ["paste.sh", "pastebin.com", "rentry.co", "justpaste.it", "controlc.com", "pastes.dev", "text.is"];
