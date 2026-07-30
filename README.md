@@ -11,6 +11,7 @@ plugin runs in its own process. Lumora only talks to a plugin after you install 
 |--------|-----------|--------------|
 | `torrentplugin` | `stream_search` | Finds a playable source for a specific title on demand and serves it back to Lumora as a local HTTP URL. |
 | `redditscan` | `provider_discovery` | Proposes provider configurations Lumora can add. |
+| `animeplugin` | `stream_search` | Searches anime metadata via public GraphQL database, resolves streams from provider APIs. Gated on plugin enable — Lumora shows anime catalog only when this plugin is active. |
 
 ## Protocol
 
@@ -33,6 +34,7 @@ Each folder is an independent Gradle project:
 ```bash
 cd torrentplugin && ./gradlew :app:assembleDebug
 cd redditscan   && ./gradlew :app:assembleDebug
+cd animeplugin  && ./gradlew :app:assembleDebug
 ```
 
 Create a `local.properties` with your `sdk.dir` (gitignored). Install the resulting APK on the
