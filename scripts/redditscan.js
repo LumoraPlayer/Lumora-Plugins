@@ -43,14 +43,20 @@ function getOAuthToken() {
                 "Authorization": "Basic " + auth,
                 "Content-Type": "application/x-www-form-urlencoded",
             });
+            host.log("reddit: oauth[" + i + "] status=" + resp.status + " len=" + (resp.body||"").length);
             if (resp.status >= 200 && resp.status < 300) {
                 var json = JSON.parse(resp.body);
-                if (json.access_token) return json.access_token;
+                if (json.access_token) {
+                    host.log("reddit: oauth[" + i + "] TOKEN_OK");
+                    return json.access_token;
+                }
+                host.log("reddit: oauth response had no access_token: " + resp.body.substring(0,200));
             }
         } catch (e) {
-            // try the next client id
+            host.log("reddit: oauth[" + i + "] threw: " + (e.message || e));
         }
     }
+    host.log("reddit: oauth ALL FAILED");
     return null;
 }
 
@@ -61,9 +67,13 @@ function fetchOAuth(url, token) {
             "Authorization": "Bearer " + token,
             "Accept": "application/json",
         });
-        if (resp.status < 200 || resp.status >= 300) return null;
+        if (resp.status < 200 || resp.status >= 300) {
+            host.log("reddit: fetchOAuth status=" + resp.status + " url=" + url.substring(0,120));
+            return null;
+        }
         return resp.body;
     } catch (e) {
+        host.log("reddit: fetchOAuth threw: " + (e.message || e) + " url=" + url.substring(0,120));
         return null;
     }
 }
@@ -103,12 +113,20 @@ function scrapeComments(children, urlSet) {
 function fetchPostsOAuth(token, posts, urlSet) {
     var pageUrl = "https://oauth.reddit.com/r/" + SUBREDDIT + "/new?limit=100&sort=new&raw_json=1";
     var jsonStr = fetchOAuth(pageUrl, token);
-    if (!jsonStr) return;
+    if (!jsonStr) {
+        host.log("reddit: fetchPostsOAuth - no response body");
+        return;
+    }
     var root = JSON.parse(jsonStr);
     var children = root && root.data && root.data.children;
-    if (!children) return;
+    if (!children) {
+        host.log("reddit: fetchPostsOAuth - no children in response, keys=" + Object.keys(root || {}).join(","));
+        return;
+    }
+    host.log("reddit: fetchPostsOAuth - " + children.length + " children");
 
     var now = Date.now();
+    var kept = 0;
     for (var i = 0; i < children.length; i++) {
         var postData = children[i] && children[i].data;
         if (!postData) continue;
@@ -122,6 +140,7 @@ function fetchPostsOAuth(token, posts, urlSet) {
         var selftext = postData.selftext || "";
         var fullPermalink = "https://www.reddit.com" + permalink;
         posts.push({ id: id, title: title, selftext: selftext, permalink: fullPermalink });
+        kept++;
 
         findPasteUrls(title + " " + selftext, urlSet);
 
@@ -142,6 +161,7 @@ function fetchPostsOAuth(token, posts, urlSet) {
             // comment tree fetch/parse failed - the post itself was already scanned
         }
     }
+    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length);
 }
 
 function redditScan() {
@@ -472,7 +492,9 @@ function discover(host) {
     var scan;
     try {
         scan = redditScan();
+        host.log("redditscan: posts=" + scan.posts.length + " urls=" + scan.pasteUrls.length);
     } catch (e) {
+        host.log("redditscan: scan threw: " + (e.message || e));
         return "Reddit scan failed";
     }
     if (scan.pasteUrls.length === 0) return "No paste links found";
