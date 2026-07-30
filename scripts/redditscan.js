@@ -211,7 +211,10 @@ function pasteShDecrypt(pasteUrl) {
         var b64Ciphertext, passwordB64;
 
         if (firstLine.length === 0) {
-            // paste.sh v3 format: leading \n, no server key. PBKDF2 key derivation.
+            // paste.sh v3 format: leading \n, no server key.
+            // Key derivation: HMAC-SHA512(password, salt || 0x00000001) -> first 48 bytes
+            // (matches the original PasteShDecryptor.kt approach, unlike PBKDF2 PBEKeySpec
+            // which uses platform-dependent char encoding).
             host.log("reddit: pasteShDecrypt v3 format for " + pasteId);
             b64Ciphertext = lines.slice(1).join("").trim();
             if (!b64Ciphertext) {
@@ -221,17 +224,16 @@ function pasteShDecrypt(pasteUrl) {
             var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
             var ctB64 = host.base64Slice(b64Ciphertext, 16, null);
             try {
-                // PBKDF2-HMAC-SHA512, 1 iteration, 48 bytes (32 key + 16 iv)
-                // Use raw password string (not base64) — matches paste.sh JS.
-                var rawPassword = pasteId + clientKey + "https://paste.sh";
-                var keyIvB64 = host.pbkdf2Sha512(rawPassword, saltB64, 1, 48);
+                var passwordB64 = host.base64Encode(pasteId + clientKey + "https://paste.sh");
+                var message = host.base64Concat(saltB64, ONE_AS_INT32BE_B64);
+                var keyIvB64 = host.hmacSha512(passwordB64, message);
                 var keyB64 = host.base64Slice(keyIvB64, 0, 32);
                 var ivB64 = host.base64Slice(keyIvB64, 32, 48);
                 var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
                 host.log("reddit: pasteShDecrypt v3 OK len=" + decrypted.length + " for " + pasteId);
                 return decrypted;
             } catch (e) {
-                host.log("reddit: pasteShDecrypt v3 PBKDF2 failed for " + pasteId + ": " + (e.message || e));
+                host.log("reddit: pasteShDecrypt v3 HMAC failed for " + pasteId + ": " + (e.message || e));
                 return null;
             }
         } else {
