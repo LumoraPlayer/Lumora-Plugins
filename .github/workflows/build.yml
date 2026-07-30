@@ -22,15 +22,15 @@ jobs:
           distribution: 'temurin'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/torrentplugin-debug.apk
+        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/torrentplugin.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: torrentplugin-debug
-          path: torrentplugin/app/build/outputs/apk/debug/torrentplugin-debug.apk
+          name: torrentplugin
+          path: torrentplugin/app/build/outputs/apk/release/torrentplugin.apk
           compression-level: 0
 
   redditscan:
@@ -47,15 +47,15 @@ jobs:
           distribution: 'temurin'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/redditscan-debug.apk
+        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/redditscan.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: redditscan-debug
-          path: redditscan/app/build/outputs/apk/debug/redditscan-debug.apk
+          name: redditscan
+          path: redditscan/app/build/outputs/apk/release/redditscan.apk
           compression-level: 0
 
   animeplugin:
@@ -72,13 +72,13 @@ jobs:
           distribution: 'temurin'
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/animeplugin-debug.apk
+        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/animeplugin.apk
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: animeplugin-debug
-          path: animeplugin/app/build/outputs/apk/debug/animeplugin-debug.apk
+          name: animeplugin
+          path: animeplugin/app/build/outputs/apk/release/animeplugin.apk
           compression-level: 0
