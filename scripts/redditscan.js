@@ -230,6 +230,10 @@ function pasteShDecrypt(pasteUrl) {
                 var keyB64 = host.base64Slice(keyIvB64, 0, 32);
                 var ivB64 = host.base64Slice(keyIvB64, 32, 48);
                 var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+                if (!decrypted) {
+                    host.log("reddit: pasteShDecrypt v3 decrypt returned null for " + pasteId);
+                    return null;
+                }
                 host.log("reddit: pasteShDecrypt v3 OK len=" + decrypted.length + " for " + pasteId);
                 return decrypted;
             } catch (e) {
@@ -254,6 +258,7 @@ function pasteShDecrypt(pasteUrl) {
                 var keyB64 = host.base64Slice(keyIvB64, 0, 32);
                 var ivB64 = host.base64Slice(keyIvB64, 32, 48);
                 var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+                if (!decrypted) throw new Error("aesCbcDecrypt returned null");
                 host.log("reddit: pasteShDecrypt legacy OK len=" + decrypted.length + " for " + pasteId);
                 return decrypted;
             } catch (e) {
