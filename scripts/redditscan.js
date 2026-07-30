@@ -126,7 +126,11 @@ function fetchPostsOAuth(token, posts, urlSet) {
         findPasteUrls(title + " " + selftext, urlSet);
 
         try {
-            var cJson = fetchOAuth(fullPermalink + ".json?raw_json=1", token);
+            // Comments must be fetched through oauth.reddit.com, not www.reddit.com - the
+            // OAuth bearer token is only accepted on the API host, so this 403s on every
+            // single post otherwise (verified against real device logs: every comment fetch
+            // failed, silently, while everything else in the run succeeded).
+            var cJson = fetchOAuth("https://oauth.reddit.com" + permalink + ".json?raw_json=1", token);
             if (cJson) {
                 var cArray = JSON.parse(cJson);
                 if (Array.isArray(cArray) && cArray.length > 1) {
