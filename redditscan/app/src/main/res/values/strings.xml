@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Reddit Scan</string>
-    <!-- Shown by the host as the plugin's description (see the service meta-data). -->
-    <string name="plugin_description">Finds IPTV providers posted publicly on Reddit and proposes them for you to add.</string>
-</resources>

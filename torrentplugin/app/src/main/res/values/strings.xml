@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Torrent Stream</string>
-    <string name="info_body">This is a companion plugin. Enable it inside the main app under Settings → Plugins, then use “Find stream” on a movie to search and play.</string>
-</resources>

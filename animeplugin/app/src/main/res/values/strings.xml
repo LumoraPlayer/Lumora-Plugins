@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Anime Stream</string>
-    <string name="info_body">This is a companion plugin for Lumora. Enable it under Settings → Plugins, then use "Find stream" on any channel to search and stream anime episodes from AniList-powered providers.</string>
-</resources>

@@ -1,4 +1,4 @@
-name: Build APKs
+name: Check plugin scripts
 
 on:
   push:
@@ -8,77 +8,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  torrentplugin:
+  syntax-check:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: torrentplugin
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-node@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - name: Build release APK
-        run: ./gradlew :app:assembleRelease --no-daemon
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/torrentplugin.apk
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: torrentplugin
-          path: torrentplugin/app/build/outputs/apk/release/torrentplugin.apk
-          compression-level: 0
-
-  redditscan:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: redditscan
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - name: Build release APK
-        run: ./gradlew :app:assembleRelease --no-daemon
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/redditscan.apk
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: redditscan
-          path: redditscan/app/build/outputs/apk/release/redditscan.apk
-          compression-level: 0
-
-  animeplugin:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: animeplugin
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-      - name: Build release APK
-        run: ./gradlew :app:assembleRelease --no-daemon
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/animeplugin.apk
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: animeplugin
-          path: animeplugin/app/build/outputs/apk/release/animeplugin.apk
-          compression-level: 0
+          node-version: 20
+      - name: Check each script parses as valid JavaScript
+        run: |
+          for f in scripts/*.js; do
+            echo "Checking $f"
+            node --check "$f"
+          done
