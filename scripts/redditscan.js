@@ -485,12 +485,17 @@ function testXtreamM3u(cred) {
         var ok = resp.status >= 200 && resp.status < 300;
         var isM3u = head.indexOf("#EXTM3U") === 0 || head.indexOf("#EXTINF") === 0 || head.indexOf("#KODIPROP") !== -1;
         var online = ok && (isM3u || head.length > 100);
-        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + head.length + " isM3u=" + isM3u + " online=" + online + " url=" + testUrl.substring(0, 100));
+        // Only accept providers that carry Sky Sports.
+        var hasSky = head.toLowerCase().indexOf("sky sports") !== -1;
+        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + head.length + " isM3u=" + isM3u + " online=" + online + " skySports=" + hasSky + " url=" + testUrl.substring(0, 100));
+        var error = null;
+        if (ok && !isM3u && head.length < 100) error = "Not a valid M3U response";
+        else if (online && !hasSky) error = "No Sky Sports channels";
         return {
             credential: cred,
-            online: online,
+            online: online && hasSky,
             responseCode: resp.status,
-            error: ok && !isM3u && head.length < 100 ? "Not a valid M3U response" : null,
+            error: error,
         };
     } catch (e) {
         host.log("reddit: testXtreamM3u threw: " + (e.message || e) + " url=" + (cred.url || "").substring(0, 60));
