@@ -102,9 +102,9 @@ class AniListClient(private val client: OkHttpClient) {
         private const val TAG = "AniListClient"
 
         private val SEARCH_QUERY = """
-            query (\$search: String) {
+            query (${'$'}search: String) {
               Page(page: 1, perPage: 10) {
-                media(search: \$search, type: ANIME) {
+                media(search: ${'$'}search, type: ANIME) {
                   id
                   idMal
                   title { romaji english native }

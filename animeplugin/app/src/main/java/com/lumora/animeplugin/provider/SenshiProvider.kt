@@ -101,17 +101,19 @@ class SenshiProvider(private val client: OkHttpClient) {
         return SenshiParser.parseEmbeds(text)
     }
 
-    private fun fetchSubtitles(url: String, base: String): String? = try {
-        val text = get(url)
-        val array = try { JSONArray(text) } catch (_: Exception) { return null }
-        if (array.length() == 0) return null
-        val first = array.optJSONObject(0) ?: return null
-        val src = first.optString("src", null)
-            ?: first.optString("url", null)
-            ?: return null
-        if (src.isBlank() || src.equals("none", ignoreCase = true)) null
-        else if (src.startsWith("http")) src else "$base/$src"
-    } catch (_: Exception) { null }
+    private fun fetchSubtitles(url: String, base: String): String? {
+        return try {
+            val text = get(url)
+            val array = try { JSONArray(text) } catch (_: Exception) { return null }
+            if (array.length() == 0) return null
+            val first = array.optJSONObject(0) ?: return null
+            val src = first.optString("src", null)
+                ?: first.optString("url", null)
+                ?: return null
+            if (src.isBlank() || src.equals("none", ignoreCase = true)) null
+            else if (src.startsWith("http")) src else "$base/$src"
+        } catch (_: Exception) { null }
+    }
 
     private fun get(url: String): String {
         val request = Request.Builder().url(url)
