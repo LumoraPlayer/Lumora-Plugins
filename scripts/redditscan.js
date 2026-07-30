@@ -161,7 +161,7 @@ function fetchPostsOAuth(token, posts, urlSet) {
             // comment tree fetch/parse failed - the post itself was already scanned
         }
     }
-    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length + " ignored=" + (children.length - kept) + " (older than 24h)");
+    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length + " ignored=" + (children.length - kept) + " (older than window)");
 }
 
 function redditScan() {
@@ -498,21 +498,28 @@ function testXtreamM3u(cred) {
         // domain), while an unreachable one leaves the domain open to other logins.
         var reachable = ok && (isM3u || body.length > 100);
         var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
-        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + body.length + " isM3u=" + isM3u + " reachable=" + reachable + " skySports=" + hasSky + " url=" + testUrl.substring(0, 100));
+        // Require a UK or EN channel group too. Matched as a whole token inside a group-title
+        // value (UK/EN sit between pipes/spaces in "UK | SPORTS", "EN | MOVIES"), so it doesn't
+        // false-match substrings like ENTERTAINMENT or UKRAINE.
+        var hasUkEn = /group-title="[^"]*\b(?:uk|en)\b/i.test(body);
+        var accepted = reachable && hasSky && hasUkEn;
+        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + body.length + " isM3u=" + isM3u + " reachable=" + reachable + " skySports=" + hasSky + " ukEn=" + hasUkEn + " url=" + testUrl.substring(0, 100));
         var error = null;
         if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
         else if (reachable && !hasSky) error = "No Sky Sports channels";
+        else if (reachable && !hasUkEn) error = "No UK/EN channels";
         return {
             credential: cred,
-            online: reachable && hasSky,
+            online: accepted,
             reachable: reachable,
             hasSky: hasSky,
+            hasUkEn: hasUkEn,
             responseCode: resp.status,
             error: error,
         };
     } catch (e) {
         host.log("reddit: testXtreamM3u threw: " + (e.message || e) + " url=" + (cred.url || "").substring(0, 60));
-        return { credential: cred, online: false, reachable: false, hasSky: false, responseCode: 0, error: e.message };
+        return { credential: cred, online: false, reachable: false, hasSky: false, hasUkEn: false, responseCode: 0, error: e.message };
     }
 }
 
@@ -529,10 +536,10 @@ function testStalker(cred) {
         host.log("reddit: testStalker status=" + resp.status + " len=" + head.length + " valid=" + valid + " url=" + cred.url);
         // Stalker portals aren't M3U, so the Sky Sports content check doesn't apply - a reachable
         // portal is accepted. hasSky=true keeps it out of the "reachable but no Sky" skip path.
-        return { credential: cred, online: valid, reachable: valid, hasSky: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
+        return { credential: cred, online: valid, reachable: valid, hasSky: true, hasUkEn: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
     } catch (e) {
         host.log("reddit: testStalker threw: " + (e.message || e) + " url=" + cred.url);
-        return { credential: cred, online: false, reachable: false, hasSky: false, responseCode: 0, error: e.message };
+        return { credential: cred, online: false, reachable: false, hasSky: false, hasUkEn: false, responseCode: 0, error: e.message };
     }
 }
 
