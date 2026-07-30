@@ -611,34 +611,32 @@ function discover(host) {
     host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
 
-    // Test one credential per unique domain, at most TARGET_WORKING (5).
+    // Test one credential per unique domain. Continue until TARGET_WORKING (5)
+    // working providers found or all domains exhausted.
     var seenDomains = {};
-    var candidates = [];
-    for (var i = 0; i < unique.length && candidates.length < TARGET_WORKING; i++) {
-        var d = domainOf(unique[i].url);
-        if (!seenDomains[d]) {
-            seenDomains[d] = true;
-            candidates.push(unique[i]);
-        }
-    }
-    host.reportProgress("Testing " + candidates.length + " unique provider(s) (" + unique.length + " total, " + candidates.length + " per domain)…");
-    host.log("reddit: testing " + candidates.length + " candidates (one per domain) out of " + unique.length + " total");
     var workingCount = 0;
-    for (var i = 0; i < candidates.length; i++) {
-        var cred = candidates[i];
-        host.reportProgress("Testing " + domainOf(cred.url) + " (" + (i + 1) + "/" + candidates.length + ")…");
+    var testedCount = 0;
+    host.reportProgress("Testing unique domains…");
+    for (var i = 0; i < unique.length && workingCount < TARGET_WORKING; i++) {
+        var cred = unique[i];
+        var domain = domainOf(cred.url);
+        if (seenDomains[domain]) continue;
+        seenDomains[domain] = true;
+        testedCount++;
+
+        host.reportProgress("[" + testedCount + "] Testing " + domain + "…");
         var result = testCredential(cred);
-        host.log("reddit: test[" + (i + 1) + "] type=" + cred.type + " url=" + domainOf(cred.url) + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
+        host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
+
         if (result.online) {
             host.reportCandidate(toCandidate(result));
             workingCount++;
-            host.log("reddit: test[" + (i + 1) + "] ACCEPTED working=" + workingCount);
-            host.reportProgress("✓ " + domainOf(cred.url) + " working — tap Add below (" + workingCount + "/" + candidates.length + ")");
+            host.log("reddit: test[" + testedCount + "] ACCEPTED working=" + workingCount);
+            host.reportProgress("✓ " + domain + " working (" + workingCount + "/" + TARGET_WORKING + ") — tap Add below");
         } else {
-            host.reportProgress("✗ " + domainOf(cred.url) + " offline (" + (i + 1) + "/" + candidates.length + ")");
+            host.reportProgress("✗ " + domain + " offline (" + testedCount + " tested, " + workingCount + " working)");
         }
     }
-    host.log("reddit: tested=" + candidates.length + " working=" + workingCount);
-
+    host.log("reddit: tested=" + testedCount + " working=" + workingCount + " domains=" + Object.keys(seenDomains).length);
     return workingCount === 0 ? "Tested " + unique.length + ", none responded" : "Found " + workingCount + " working provider(s)";
 }
