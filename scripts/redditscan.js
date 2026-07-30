@@ -161,7 +161,7 @@ function fetchPostsOAuth(token, posts, urlSet) {
             // comment tree fetch/parse failed - the post itself was already scanned
         }
     }
-    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length);
+    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length + " ignored=" + (children.length - kept) + " (older than 24h)");
 }
 
 function redditScan() {
@@ -189,19 +189,34 @@ var ONE_AS_INT32BE_B64 = "AAAAAQ=="; // base64 of the 4 bytes [0,0,0,1]
 function pasteShDecrypt(pasteUrl) {
     try {
         var hashIdx = pasteUrl.indexOf("#");
-        if (hashIdx <= 0) return null;
+        if (hashIdx <= 0) {
+            host.log("reddit: pasteShDecrypt no hash in url=" + pasteUrl.substring(0, 80));
+            return null;
+        }
         var baseUrl = pasteUrl.substring(0, hashIdx);
         var clientKey = pasteUrl.substring(hashIdx + 1);
         var pasteId = baseUrl.substring(baseUrl.lastIndexOf("/") + 1);
-        if (!pasteId) return null;
+        if (!pasteId) {
+            host.log("reddit: pasteShDecrypt no pasteId from " + pasteUrl.substring(0, 80));
+            return null;
+        }
 
         var resp = host.httpGet(baseUrl + ".txt", { "User-Agent": "Mozilla/5.0", "Accept": "text/plain,*/*" });
-        if (resp.status < 200 || resp.status >= 300) return null;
+        if (resp.status < 200 || resp.status >= 300) {
+            host.log("reddit: pasteShDecrypt fetch status=" + resp.status + " for " + pasteId);
+            return null;
+        }
         var lines = resp.body.split("\n");
         var serverKey = (lines[0] || "").trim();
-        if (!serverKey) return null;
+        if (!serverKey) {
+            host.log("reddit: pasteShDecrypt no serverKey for " + pasteId);
+            return null;
+        }
         var b64Ciphertext = lines.slice(1).join("").trim();
-        if (!b64Ciphertext) return null;
+        if (!b64Ciphertext) {
+            host.log("reddit: pasteShDecrypt no ciphertext for " + pasteId);
+            return null;
+        }
 
         var passwordB64 = host.base64Encode(pasteId + serverKey + clientKey + "https://paste.sh");
         var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
@@ -212,11 +227,18 @@ function pasteShDecrypt(pasteUrl) {
             var keyIvB64 = host.hmacSha512(passwordB64, message);
             var keyB64 = host.base64Slice(keyIvB64, 0, 32);
             var ivB64 = host.base64Slice(keyIvB64, 32, 48);
-            return host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+            var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
+            host.log("reddit: pasteShDecrypt OK len=" + decrypted.length + " for " + pasteId);
+            return decrypted;
         } catch (e) {
-            return evpBytesToKeyDecrypt(passwordB64, saltB64, ctB64);
+            host.log("reddit: pasteShDecrypt HMAC failed for " + pasteId + ", trying EVP fallback: " + (e.message || e));
+            var fallback = evpBytesToKeyDecrypt(passwordB64, saltB64, ctB64);
+            if (fallback) host.log("reddit: pasteShDecrypt EVP fallback OK len=" + fallback.length + " for " + pasteId);
+            else host.log("reddit: pasteShDecrypt EVP fallback also failed for " + pasteId);
+            return fallback;
         }
     } catch (e) {
+        host.log("reddit: pasteShDecrypt threw: " + (e.message || e) + " for " + pasteUrl.substring(0, 60));
         return null;
     }
 }
@@ -246,7 +268,7 @@ function pasteId(url) {
 function fetchPaste(url) {
     try {
         var actualUrl = url;
-        if (url.indexOf("pastebin.com/") !== -1 && url.indexOf("/raw/") === -1) {
+        if (url.indexOf("pastebin.com/") !== -1 && url.indexOf("/raw") === -1) {
             actualUrl = "https://pastebin.com/raw/" + pasteId(url);
         } else if (url.indexOf("rentry.co/") !== -1 && url.indexOf("/raw") === -1) {
             actualUrl = "https://rentry.co/" + pasteId(url) + "/raw";
@@ -254,9 +276,14 @@ function fetchPaste(url) {
             actualUrl = "https://api.pastes.dev/" + pasteId(url);
         }
         var resp = host.httpGet(actualUrl, { "User-Agent": "Mozilla/5.0", "Accept": "text/plain,text/html,*/*" });
-        if (resp.status < 200 || resp.status >= 300) return null;
+        if (resp.status < 200 || resp.status >= 300) {
+            host.log("reddit: fetchPaste status=" + resp.status + " url=" + actualUrl.substring(0, 100));
+            return null;
+        }
+        host.log("reddit: fetchPaste OK status=" + resp.status + " len=" + (resp.body || "").length + " url=" + actualUrl.substring(0, 80));
         return resp.body;
     } catch (e) {
+        host.log("reddit: fetchPaste threw: " + (e.message || e) + " url=" + url.substring(0, 80));
         return null;
     }
 }
@@ -420,7 +447,8 @@ function buildM3uUrl(cred) {
 
 function testXtreamM3u(cred) {
     try {
-        var resp = host.httpGet(buildM3uUrl(cred), {
+        var testUrl = buildM3uUrl(cred);
+        var resp = host.httpGet(testUrl, {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "*/*",
             "Connection": "close",
@@ -429,13 +457,16 @@ function testXtreamM3u(cred) {
         var head = (resp.body || "").substring(0, 8192);
         var ok = resp.status >= 200 && resp.status < 300;
         var isM3u = head.indexOf("#EXTM3U") === 0 || head.indexOf("#EXTINF") === 0 || head.indexOf("#KODIPROP") !== -1;
+        var online = ok && (isM3u || head.length > 100);
+        host.log("reddit: testXtreamM3u status=" + resp.status + " len=" + head.length + " isM3u=" + isM3u + " online=" + online + " url=" + testUrl.substring(0, 100));
         return {
             credential: cred,
-            online: ok && (isM3u || head.length > 100),
+            online: online,
             responseCode: resp.status,
             error: ok && !isM3u && head.length < 100 ? "Not a valid M3U response" : null,
         };
     } catch (e) {
+        host.log("reddit: testXtreamM3u threw: " + (e.message || e) + " url=" + (cred.url || "").substring(0, 60));
         return { credential: cred, online: false, responseCode: 0, error: e.message };
     }
 }
@@ -450,8 +481,10 @@ function testStalker(cred) {
         var head = (resp.body || "").substring(0, 8192);
         var ok = resp.status >= 200 && resp.status < 300;
         var valid = ok && head.length > 50;
+        host.log("reddit: testStalker status=" + resp.status + " len=" + head.length + " valid=" + valid + " url=" + cred.url);
         return { credential: cred, online: valid, responseCode: resp.status, error: valid ? null : "Portal not responding" };
     } catch (e) {
+        host.log("reddit: testStalker threw: " + (e.message || e) + " url=" + cred.url);
         return { credential: cred, online: false, responseCode: 0, error: e.message };
     }
 }
@@ -500,6 +533,16 @@ function discover(host) {
     if (scan.pasteUrls.length === 0) return "No paste links found";
     host.reportProgress("Found " + scan.posts.length + " posts, " + scan.pasteUrls.length + " paste links");
 
+    // Log paste URL breakdown by domain
+    var domainCounts = {};
+    for (var i = 0; i < scan.pasteUrls.length; i++) {
+        var d = domainOf(scan.pasteUrls[i]);
+        domainCounts[d] = (domainCounts[d] || 0) + 1;
+    }
+    var domainSummary = "";
+    for (var d in domainCounts) domainSummary += d + "=" + domainCounts[d] + " ";
+    host.log("reddit: pasteDomains " + domainSummary);
+
     var contents = [];
     for (var i = 0; i < scan.pasteUrls.length; i++) {
         var url = scan.pasteUrls[i];
@@ -515,8 +558,19 @@ function discover(host) {
 
     host.reportProgress("Parsing credentials…");
     var parsed = [];
-    for (var i = 0; i < contents.length; i++) parsed = parsed.concat(parseCredentials(contents[i]));
-    for (var i = 0; i < scan.posts.length; i++) parsed = parsed.concat(parseCredentials(scan.posts[i].title + " " + scan.posts[i].selftext));
+    var pasteCreds = 0;
+    for (var i = 0; i < contents.length; i++) {
+        var c = parseCredentials(contents[i]);
+        parsed = parsed.concat(c);
+        pasteCreds += c.length;
+    }
+    var postCreds = 0;
+    for (var i = 0; i < scan.posts.length; i++) {
+        var c = parseCredentials(scan.posts[i].title + " " + scan.posts[i].selftext);
+        parsed = parsed.concat(c);
+        postCreds += c.length;
+    }
+    host.log("reddit: parsed pasteCount=" + contents.length + " pasteCreds=" + pasteCreds + " postCreds=" + postCreds + " total=" + parsed.length);
 
     var seen = {};
     var unique = [];
@@ -527,28 +581,38 @@ function discover(host) {
             unique.push(parsed[i]);
         }
     }
+    host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
     host.reportProgress("Testing " + unique.length + " credential(s)…");
 
     var workingCount = 0;
     var seenDomains = {};
+    var testedCount = 0;
     var remaining = unique.slice();
     while (remaining.length > 0 && workingCount < TARGET_WORKING) {
         remaining = remaining.filter(function (c) { return !seenDomains[domainOf(c.url)]; });
         if (remaining.length === 0) break;
         var batch = remaining.splice(0, 20);
         for (var i = 0; i < batch.length; i++) {
-            var result = testCredential(batch[i]);
+            testedCount++;
+            var cred = batch[i];
+            var result = testCredential(cred);
+            host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domainOf(cred.url) + " user=" + (cred.username || "").substring(0, 12) + " online=" + result.online + " code=" + result.responseCode);
             if (!result.online) continue;
             var domain = domainOf(result.credential.url);
-            if (seenDomains[domain]) continue;
+            if (seenDomains[domain]) {
+                host.log("reddit: test[" + testedCount + "] duplicate domain=" + domain + " - skipping");
+                continue;
+            }
             seenDomains[domain] = true;
             host.reportCandidate(toCandidate(result));
             workingCount++;
+            host.log("reddit: test[" + testedCount + "] ACCEPTED working=" + workingCount + " domain=" + domain);
             host.reportProgress("Found " + workingCount + " working provider(s)…");
             if (workingCount >= TARGET_WORKING) break;
         }
     }
+    host.log("reddit: tested=" + testedCount + " working=" + workingCount + " seenDomains=" + Object.keys(seenDomains).length);
 
     return workingCount === 0 ? "Tested " + unique.length + ", none responded" : "Found " + workingCount + " working provider(s)";
 }
