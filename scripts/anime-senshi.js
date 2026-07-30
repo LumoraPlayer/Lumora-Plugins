@@ -7,6 +7,7 @@ PLUGIN = {
     label: "Anime (Senshi)",
     description: "AniList search + senshi.live streaming for anime.",
     capabilities: ["stream_search"],
+    contentTypes: ["anime"],
 };
 
 var SENSHI_BASE = "https://senshi.live";
