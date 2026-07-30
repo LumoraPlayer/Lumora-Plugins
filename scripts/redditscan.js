@@ -218,12 +218,13 @@ function pasteShDecrypt(pasteUrl) {
                 host.log("reddit: pasteShDecrypt no ciphertext for " + pasteId);
                 return null;
             }
-            passwordB64 = host.base64Encode(pasteId + clientKey + "https://paste.sh");
             var saltB64 = host.base64Slice(b64Ciphertext, 8, 16);
             var ctB64 = host.base64Slice(b64Ciphertext, 16, null);
             try {
                 // PBKDF2-HMAC-SHA512, 1 iteration, 48 bytes (32 key + 16 iv)
-                var keyIvB64 = host.pbkdf2Sha512(passwordB64, saltB64, 1, 48);
+                // Use raw password string (not base64) — matches paste.sh JS.
+                var rawPassword = pasteId + clientKey + "https://paste.sh";
+                var keyIvB64 = host.pbkdf2Sha512(rawPassword, saltB64, 1, 48);
                 var keyB64 = host.base64Slice(keyIvB64, 0, 32);
                 var ivB64 = host.base64Slice(keyIvB64, 32, 48);
                 var decrypted = host.aesCbcDecrypt(ctB64, keyB64, ivB64);
