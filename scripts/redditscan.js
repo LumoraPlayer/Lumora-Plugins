@@ -611,13 +611,13 @@ function discover(host) {
     host.log("reddit: deduped from " + parsed.length + " to " + unique.length + " unique credentials");
     if (unique.length === 0) return "No credentials found in pastes";
 
-    // Test one credential per unique domain. Continue until TARGET_WORKING (5)
-    // working providers found or all domains exhausted.
+    // Test one credential per unique domain. Test ALL unique domains — show every
+    // working one as a candidate the user can add. Does NOT stop after TARGET_WORKING.
     var seenDomains = {};
     var workingCount = 0;
     var testedCount = 0;
     host.reportProgress("Testing unique domains…");
-    for (var i = 0; i < unique.length && workingCount < TARGET_WORKING; i++) {
+    for (var i = 0; i < unique.length; i++) {
         var cred = unique[i];
         var domain = domainOf(cred.url);
         if (seenDomains[domain]) continue;
@@ -632,11 +632,11 @@ function discover(host) {
             host.reportCandidate(toCandidate(result));
             workingCount++;
             host.log("reddit: test[" + testedCount + "] ACCEPTED working=" + workingCount);
-            host.reportProgress("✓ " + domain + " working (" + workingCount + "/" + TARGET_WORKING + ") — tap Add below");
+            host.reportProgress("✓ " + domain + " working (" + workingCount + " found) — tap Add below");
         } else {
             host.reportProgress("✗ " + domain + " offline (" + testedCount + " tested, " + workingCount + " working)");
         }
     }
     host.log("reddit: tested=" + testedCount + " working=" + workingCount + " domains=" + Object.keys(seenDomains).length);
-    return workingCount === 0 ? "Tested " + unique.length + ", none responded" : "Found " + workingCount + " working provider(s)";
+    return workingCount === 0 ? "Tested " + testedCount + " domains, none responded" : "Found " + workingCount + " working provider(s)";
 }
