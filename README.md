@@ -3,11 +3,41 @@
 JS plugin scripts for [Lumora](https://github.com/disclosurez/Lumora). A plugin is a single `.js`
 text file evaluated in-process by Lumora's embedded QuickJS engine — no separate app to install,
 no IPC. Lumora ships the scripts in `scripts/` bundled into its own APK (`assets/plugins/`); users
-can add more later from Settings → Plugins (paste text or fetch a URL) without installing anything.
+can add more later from Settings → Plugins without installing anything, either one at a time
+(paste text or fetch a `.js` URL) or by browsing this repo's catalog (`scripts/index.json`) as a
+**plugin store** — Lumora adds it as the default store and users can add others (a fork, a
+community repo, ...) the same way.
 
 This repo used to hold three standalone companion APKs (`animeplugin`, `redditscan`,
 `torrentplugin`) that Lumora talked to over a bound `Messenger` service. That protocol is gone;
 see Lumora's `com.lumora.plugin.js` package for the current one.
+
+## Store catalog
+
+`scripts/index.json` is what makes this repo a plugin store - a small JSON file listing every
+script here, resolved by Lumora's `PluginStoreManager`:
+
+```json
+{
+  "name": "Lumora Plugins",
+  "scripts": [
+    {
+      "id": "anime.senshi",
+      "label": "Anime (Senshi)",
+      "description": "...",
+      "capabilities": ["stream_search"],
+      "file": "anime-senshi.js"
+    }
+  ]
+}
+```
+
+`file` is resolved relative to `index.json`'s own URL (the common case - a store is usually just
+this file sitting next to its scripts) or can be an absolute `http(s)://` URL if a store's scripts
+live elsewhere. Add an entry here whenever a script is added to `scripts/`, or a community store
+can just point at a different `index.json` with its own list. Lumora refuses to install a script
+whose `id` collides with one of its own bundled scripts, so pick an id that won't clash with
+`anime.senshi` / `reddit.iptvscan` / `torrent.search`.
 
 ## Scripts
 

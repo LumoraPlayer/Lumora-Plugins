@@ -1,0 +1,26 @@
+{
+  "name": "Lumora Plugins",
+  "scripts": [
+    {
+      "id": "anime.senshi",
+      "label": "Anime (Senshi)",
+      "description": "Searches AniList for anime, resolves streams from senshi.live.",
+      "capabilities": ["stream_search"],
+      "file": "anime-senshi.js"
+    },
+    {
+      "id": "reddit.iptvscan",
+      "label": "Reddit IPTV Scanner",
+      "description": "Scans r/IPTV_ZONENEW for public IPTV credential pastes and proposes working ones.",
+      "capabilities": ["provider_discovery"],
+      "file": "redditscan.js"
+    },
+    {
+      "id": "torrent.search",
+      "label": "Torrent Search",
+      "description": "Searches public torrent indexers for a title and streams the result via Lumora's built-in torrent engine.",
+      "capabilities": ["stream_search"],
+      "file": "torrent-search.js"
+    }
+  ]
+}
