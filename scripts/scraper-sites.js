@@ -26,6 +26,14 @@
 // own code resolves a live domain at runtime and writes it back; the manifest seeds those so the
 // two agree on a fresh install.
 //
+// `anime: true` marks an anime-only catalogue. Those sites cannot answer for a live-action
+// title, so the app skips them unless the title is itself anime - roughly half the list was
+// being queried for films it could never carry.
+//
+// `heavy: true` marks a site whose search goes through the Cloudflare WebView bypass: a full
+// Chromium page load per query, by far the most expensive step here. Those are held back and
+// only queried if the cheap sites came up empty.
+//
 // `name` must match the provider's own name exactly; that is the key the app matches on.
 
 PLUGIN = {
@@ -35,47 +43,47 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 2;
+var VERSION = 3;
 
 var SITES = [
     { name: "Altadefinizione01", language: "it", enabled: true, baseUrl: "https://altadefinizione-01.fun" },
-    { name: "Anikoto", language: "en", enabled: true, baseUrl: "https://anikototv.to" },
-    { name: "Anime Online Ninja", language: "es", enabled: true, baseUrl: "https://ww3.animeonline.ninja" },
-    { name: "AnimeAV1", language: "es", enabled: true, baseUrl: "https://animeav1.com" },
-    { name: "Animefenix", language: "es", enabled: true, baseUrl: "https://animefenix2.tv" },
-    { name: "AnimeFLV", language: "es", enabled: true, baseUrl: "https://www3.animeflv.net" },
-    { name: "AnimeSaturn", language: "it", enabled: true, baseUrl: "https://www.animesaturn.cx" },
-    { name: "AnimeUnity", language: "it", enabled: true, baseUrl: "https://www.animeunity.so" },
-    { name: "AnimeWorld", language: "it", enabled: true, baseUrl: "https://www.animeworld.ac" },
-    { name: "AniWorld", language: "de", enabled: true, baseUrl: "https://aniworld.to/" },
+    { name: "Anikoto", language: "en", enabled: true, baseUrl: "https://anikototv.to", anime: true },
+    { name: "Anime Online Ninja", language: "es", enabled: true, baseUrl: "https://ww3.animeonline.ninja", anime: true, heavy: true },
+    { name: "AnimeAV1", language: "es", enabled: true, baseUrl: "https://animeav1.com", anime: true },
+    { name: "Animefenix", language: "es", enabled: true, baseUrl: "https://animefenix2.tv", anime: true },
+    { name: "AnimeFLV", language: "es", enabled: true, baseUrl: "https://www3.animeflv.net", anime: true },
+    { name: "AnimeSaturn", language: "it", enabled: true, baseUrl: "https://www.animesaturn.cx", anime: true },
+    { name: "AnimeUnity", language: "it", enabled: true, baseUrl: "https://www.animeunity.so", anime: true },
+    { name: "AnimeWorld", language: "it", enabled: true, baseUrl: "https://www.animeworld.ac", anime: true },
+    { name: "AniWorld", language: "de", enabled: true, baseUrl: "https://aniworld.to/", anime: true },
     { name: "CableVisionHD", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://www.cablevisionhd.com" },
     { name: "CB01", language: "it", enabled: true, baseUrl: "https://cb01official.uno" },
-    { name: "Cine24h", language: "es", enabled: true, baseUrl: "https://cine24h.online" },
+    { name: "Cine24h", language: "es", enabled: true, baseUrl: "https://cine24h.online", heavy: true },
     { name: "CineCalidad", language: "es", enabled: true, baseUrl: "https://www.cinecalidad.ec" },
     { name: "CineHax", language: "es", enabled: true, baseUrl: "https://cinehax.com" },
     { name: "Cuevana 3", language: "es", enabled: true, domainKey: "cuevana", baseUrl: "https://cuevana.gs" },
-    { name: "Doramasflix", language: "es", enabled: true, baseUrl: "https://doramasflix.in" },
+    { name: "Doramasflix", language: "es", enabled: true, baseUrl: "https://doramasflix.in", anime: true },
     { name: "Einschalten", language: "de", enabled: true, baseUrl: "https://einschalten.in" },
     { name: "Fanpelis", language: "es", enabled: true, baseUrl: "https://fanpelis.to/" },
     { name: "Filmpalast", language: "de", enabled: true, baseUrl: "https://filmpalast.to" },
-    { name: "FilmyOnline", language: "pl", enabled: true, baseUrl: "https://filmyonline.cc" },
+    { name: "FilmyOnline", language: "pl", enabled: true, baseUrl: "https://filmyonline.cc", heavy: true },
     { name: "FlixLatam", language: "es", enabled: true, baseUrl: "https://flixlatam.com" },
     { name: "Frembed", language: "fr", enabled: true, baseUrl: "https://frembed.casa/" },
-    { name: "FrenchAnime", language: "fr", enabled: true, baseUrl: "https://french-anime.com/" },
-    { name: "FrenchManga", language: "fr", enabled: true, baseUrl: "https://w16.french-manga.net/" },
+    { name: "FrenchAnime", language: "fr", enabled: true, baseUrl: "https://french-anime.com/", anime: true },
+    { name: "FrenchManga", language: "fr", enabled: true, baseUrl: "https://w16.french-manga.net/", anime: true },
     { name: "FrenchStream", language: "fr", enabled: true, baseUrl: "https://fs16.lol/" },
     { name: "GuardaFlix", language: "it", enabled: true, baseUrl: "https://guardaplay.store" },
-    { name: "GuardaSerie", language: "it", enabled: true, baseUrl: "https://guardoserie.study" },
+    { name: "GuardaSerie", language: "it", enabled: true, baseUrl: "https://guardoserie.study", heavy: true },
     { name: "HDFilme", language: "de", enabled: true, baseUrl: "https://hdfilme.win" },
     { name: "IPTV Spain", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://iptv-org.github.io/iptv/languages/spa.m3u" },
     { name: "IPTV-All World", language: "en", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://iptv-org.github.io/iptv" },
-    { name: "JKAnime", language: "es", enabled: true, baseUrl: "https://jkanime.net" },
-    { name: "Kidraz", language: "fr", enabled: true, baseUrl: "https://www.kidraz.com/saby1jy/home/kidraz" },
-    { name: "La Cartoons", language: "es", enabled: true, baseUrl: "https://www.lacartoons.com" },
-    { name: "Latanime", language: "es", enabled: true, baseUrl: "https://latanime.org" },
+    { name: "JKAnime", language: "es", enabled: true, baseUrl: "https://jkanime.net", anime: true },
+    { name: "Kidraz", language: "fr", enabled: true, baseUrl: "https://www.kidraz.com/saby1jy/home/kidraz", anime: true },
+    { name: "La Cartoons", language: "es", enabled: true, baseUrl: "https://www.lacartoons.com", anime: true },
+    { name: "Latanime", language: "es", enabled: true, baseUrl: "https://latanime.org", anime: true },
     { name: "MAGISTV", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://raw.githubusercontent.com" },
     { name: "MEGAKino", language: "de", enabled: true, baseUrl: "https://megakino12.com" },
-    { name: "MKissa", language: "en", enabled: true, baseUrl: "https://mkissa.to/anime" },
+    { name: "MKissa", language: "en", enabled: true, baseUrl: "https://mkissa.to/anime", anime: true },
     { name: "Moflix", language: "de", enabled: true, domainKey: "moflix", baseUrl: "https://moflix-stream.xyz" },
     { name: "PelisflixHD", language: "es", enabled: true, baseUrl: "https://pelisflixhd.win" },
     { name: "Pelisplusto", language: "es", enabled: true, baseUrl: "https://pelisplus.to" },
@@ -87,7 +95,7 @@ var SITES = [
     { name: "Pluto TV It", language: "it", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://raw.githubusercontent.com" },
     { name: "Pluto TV MX", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://raw.githubusercontent.com" },
     { name: "Pluto TV Us", language: "en", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://raw.githubusercontent.com" },
-    { name: "Poseidonhd2", language: "es", enabled: true, domainKey: "poseidon", baseUrl: "https://www.poseidonhd2.co" },
+    { name: "Poseidonhd2", language: "es", enabled: true, domainKey: "poseidon", baseUrl: "https://www.poseidonhd2.co", heavy: true },
     { name: "Ridomovies", language: "en", enabled: true, baseUrl: "https://ridomovies.tv/" },
     { name: "SerienStream", language: "de", enabled: true, domainKey: "serienstream", baseUrl: "https://s.to" },
     { name: "Series Turcas", language: "es", enabled: true, baseUrl: "https://tbg.seriesturcastv.to" },
@@ -96,11 +104,11 @@ var SITES = [
     { name: "SoloLatino", language: "es", enabled: true, baseUrl: "https://sololatino.net" },
     { name: "StreamingCommunity", language: "it", enabled: true, domainKey: "streamingcommunity", baseUrl: "https://streamingunity.cc" },
     { name: "StreamingCommunity EN", language: "en", enabled: true, domainKey: "streamingcommunity", baseUrl: "https://streamingunity.cc" },
-    { name: "TioAnime", language: "es", enabled: true, baseUrl: "https://tioanime.com" },
+    { name: "TioAnime", language: "es", enabled: true, baseUrl: "https://tioanime.com", anime: true },
     { name: "Tv Libre Futbol", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://www.librefutbol2.com" },
     { name: "TvporinternetHD", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://www.tvporinternet2.com" },
     { name: "Wiflix", language: "fr", enabled: true, baseUrl: "https://flemmix.team/" },
-    { name: "Zaluknij", language: "pl", enabled: true, baseUrl: "https://zaluknij.cc" },
+    { name: "Zaluknij", language: "pl", enabled: true, baseUrl: "https://zaluknij.cc", heavy: true },
 ];
 
 // The host reads this back as a JSON string: it crosses the bridge once, deterministically,
