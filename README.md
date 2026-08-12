@@ -45,7 +45,33 @@ whose `id` collides with one of its own bundled scripts, so pick an id that won'
 |------|-----------|---------------|
 | `scripts/anime-senshi.js` | `stream_search` | Searches AniList for anime, resolves streams from senshi.live. |
 | `scripts/redditscan.js` | `provider_discovery` | Scans r/IPTV_ZONENEW for public IPTV credential pastes and proposes working ones. |
+| `scripts/scraper-sites.js` | `scraper_sites` | Data only: which of Lumora's built-in scraper sites are live, and where the repointable ones point. |
 | `scripts/torrent-search.js` | `stream_search` (`resolvesNatively`) | Searches public torrent indexers (ThePirateBay, Knaben) for a title; actual torrent streaming is handled by Lumora's built-in native `com.lumora.torrent.TorrentEngine`, not this script. |
+
+## Scraper site list
+
+`scripts/scraper-sites.js` carries data rather than behaviour. It is the data half of Lumora's
+built-in scraper engine (`com.lumora.scraper`), which is compiled into the app: the per-site
+parsers, the extractors and the Cloudflare bypass all ship in the APK, because none of them can
+be expressed as data.
+
+What *can* be expressed as data is which of those sites are still up, and which domain the few
+repointable ones are on — and that is the half that rots. Editing this file takes a dead site out
+of rotation for everyone on the next daily refresh, with no app release.
+
+- `enabled: false` is a kill switch. It cannot switch a site back *on* for a user who turned it
+  off in Settings; their choice wins.
+- `domain` only does anything on an entry that also has `domainKey` — those are the sites that
+  read their host at runtime. Anywhere else it would be silently ignored, so it is left off.
+- A `name` the installed app does not recognise is skipped, and a site the app has but this file
+  omits stays enabled, so this file and the app can be updated independently in either order.
+
+It declares the `scraper_sites` capability and implements `function sites(host)`, returning the
+list as a JSON string - one deterministic trip across the QuickJS bridge, rather than a nested
+array of objects, which is the one shape that bridge does not round-trip reliably.
+
+Installing it is the same as any other script. Until it is installed the app uses an equivalent
+list bundled in its assets, so a fresh install still skips the sites already known to be dead.
 
 ## Protocol
 
