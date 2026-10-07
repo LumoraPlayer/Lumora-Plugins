@@ -103,6 +103,12 @@ function discover(host) {
 `JSON.parse`/`stringify`, crypto primitives (`aesCbcDecrypt`, `hmacSha512`, `md5Bytes`, base64),
 and Jsoup-backed HTML selectors (`selectAll`, `selectText`, `selectAttr`, ...) for scraping.
 
+`httpGet`/`httpPost` take an optional trailing `timeoutMs` argument, and every `host.httpGetAll`
+request object an optional `timeoutMs` property. It is a total per-request deadline (connect +
+read); without it the app's shared client waits its 30s connect / 60s read timeouts, which is far
+too long for a discovery script probing many dead hosts. Bound probe loops per-run as well (see
+redditscan.js's `MAX_ROUNDS`/`PROBE_TIMEOUT_MS`): Lumora aborts a discovery run at 5 minutes.
+
 ## Testing
 
 These scripts are exercised by JVM tests in Lumora itself

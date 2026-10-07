@@ -15,7 +15,13 @@ var SUBREDDIT = "IPTV_ZONENEW";
 var CLIENT_IDS = ["ohXpoqrZYub1kg", "NOe2iKrPPzwscA"];
 var OAUTH_UA = "RedditScanPlugin/1.0";
 var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-var TARGET_WORKING = 5;
+// Testing every login of every domain is thousands of requests and hours of wall time (a scan
+// regularly parses ~10k credentials across ~60 domains), so the probe loop is deliberately
+// bounded: at most MAX_ROUNDS logins per domain, and each probe gets PROBE_TIMEOUT_MS via the
+// host's per-request timeoutMs instead of the client's 30s connect / 60s read defaults. A dead
+// host must not hold the whole run open - the app kills discovery at 5 minutes.
+var MAX_ROUNDS = 5;
+var PROBE_TIMEOUT_MS = 15000;
 
 var PASTE_DOMAINS = ["paste.sh", "pastebin.com", "rentry.co", "justpaste.it", "controlc.com", "pastes.dev", "text.is"];
 var PASTE_URL_REGEX = new RegExp(
@@ -479,14 +485,16 @@ function buildM3uUrl(cred) {
 
 var M3U_RANGE = "bytes=0-5242879"; // big enough to reach Sky Sports/UK rows in an m3u_plus
 
-// The request a credential's live test needs, as { url, headers } for host.httpGetAll. Splitting
-// "build the request" from "evaluate the response" is what lets the discover loop fire a whole
-// batch of provider tests concurrently instead of one blocking GET at a time.
+// The request a credential's live test needs, as { url, headers, timeoutMs } for host.httpGetAll.
+// Splitting "build the request" from "evaluate the response" is what lets the discover loop fire a
+// whole batch of provider tests concurrently instead of one blocking GET at a time. The short
+// timeoutMs is what keeps a round full of dead hosts from taking minutes.
 function buildTestRequest(cred) {
     if (cred.type === "stalker") {
         return {
             url: cred.url.replace(/\/+$/, ""),
             headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "*/*", "Range": "bytes=0-8191" },
+            timeoutMs: PROBE_TIMEOUT_MS,
         };
     }
     return {
@@ -497,6 +505,7 @@ function buildTestRequest(cred) {
             "Connection": "close",
             "Range": M3U_RANGE,
         },
+        timeoutMs: PROBE_TIMEOUT_MS,
     };
 }
 
@@ -628,6 +637,10 @@ function discover(host) {
     // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports +
     // a UK/EN group, else skipped. Only a dead login leaves the domain open for its next login in
     // the following round - one bad credential shouldn't write off a whole provider.
+    //
+    // Bounded at MAX_ROUNDS (see its comment): a domain with a hundred pasted logins would
+    // otherwise keep the loop running for hours, and the app aborts discovery at 5 minutes. What
+    // was found by then is reported; stoppedEarly changes the final message to say it stopped.
     var byDomain = {};
     var domainOrder = [];
     for (var i = 0; i < unique.length; i++) {
@@ -637,10 +650,22 @@ function discover(host) {
     }
     var resolvedDomains = {}; // domain -> "accepted" | "nosky"
     var cursor = {};          // domain -> index of its next untried login
-    var workingCount = 0, noSkyCount = 0, testedCount = 0, round = 0;
+    var workingCount = 0, noSkyCount = 0, testedCount = 0, round = 0, stoppedEarly = false;
     host.reportProgress("Testing " + domainOrder.length + " domain(s)…");
 
-    while (true) {
+    function hasPendingWork() {
+        for (var i = 0; i < domainOrder.length; i++) {
+            var d = domainOrder[i];
+            if (!resolvedDomains[d] && (cursor[d] || 0) < byDomain[d].length) return true;
+        }
+        return false;
+    }
+
+    while (hasPendingWork()) {
+        if (round >= MAX_ROUNDS) {
+            stoppedEarly = true;
+            break;
+        }
         // Assemble this round: one next-untried login per unresolved domain.
         var roundDomains = [], roundCreds = [], roundReqs = [];
         for (var i = 0; i < domainOrder.length; i++) {
@@ -654,7 +679,7 @@ function discover(host) {
         }
         if (roundReqs.length === 0) break;
         round++;
-        host.reportProgress("Round " + round + ": testing " + roundReqs.length + " domain(s) in parallel…");
+        host.reportProgress("Round " + round + "/" + MAX_ROUNDS + ": testing " + roundReqs.length + " domain(s) in parallel…");
         var responses = host.httpGetAll(roundReqs);
 
         for (var j = 0; j < roundCreds.length; j++) {
@@ -676,8 +701,9 @@ function discover(host) {
         }
     }
     var domainCount = Object.keys(resolvedDomains).length;
-    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount);
+    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount + " stoppedEarly=" + stoppedEarly);
+    var suffix = stoppedEarly ? " (stopped after " + MAX_ROUNDS + " rounds)" : "";
     return workingCount === 0
-        ? "Tested " + testedCount + " credential(s), none had Sky Sports"
-        : "Found " + workingCount + " working provider(s)";
+        ? "Tested " + testedCount + " credential(s), none had Sky Sports" + suffix
+        : "Found " + workingCount + " working provider(s)" + suffix;
 }
