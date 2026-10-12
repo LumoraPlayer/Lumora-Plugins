@@ -26,6 +26,9 @@ var MAX_PAGES = 10;
 // host must not hold the whole run open - the app kills discovery at 5 minutes.
 var MAX_ROUNDS = 5;
 var PROBE_TIMEOUT_MS = 15000;
+// How many channel URLs one candidate may probe before it is written off as non-streaming. One
+// dead row - or a dead CDN behind the first row - says nothing about the rest of the panel.
+var MAX_STREAM_PROBES = 3;
 
 var PASTE_DOMAINS = ["paste.sh", "pastebin.com", "rentry.co", "justpaste.it", "controlc.com", "pastes.dev", "text.is"];
 var PASTE_URL_REGEX = new RegExp(
@@ -561,15 +564,17 @@ function evalResponse(cred, resp) {
 // A playlist that lists Sky Sports is not the same as a panel that serves it: credentials can
 // be expired mid-playlist (the endpoint answers, the streams 401), the connection limit can be
 // reached, or the channel rows can point at a dead CDN. The old evaluator accepted any of those.
-// These helpers pull a real channel URL out of the already-fetched playlist and send one small
-// Range request at it, so "accepted" means bytes for a live channel actually arrived.
+// These helpers pull up to MAX_STREAM_PROBES real channel URLs out of the already-fetched
+// playlist and send one small Range request at each, so "accepted" means bytes for a live
+// channel actually arrived - and a provider is only rejected once every probed channel failed.
 
-/** First live channel URL in a fetched m3u_plus body: a Sky Sports row if there is one, else
- *  the first playable channel row. Only absolute http(s) (and //host) URLs - a relative path
- *  can't be probed without resolving it against the panel. */
-function findLiveStreamUrl(body) {
+/** Up to `max` live channel URLs from a fetched m3u_plus body, Sky Sports rows first (then the
+ *  rest in playlist order, deduplicated) so a dead Sky row can fall back to another channel.
+ *  Only absolute http(s) (and //host) URLs - a relative path can't be probed without resolving
+ *  it against the panel. */
+function findLiveStreamUrls(body, max) {
     var lines = body.split(/\r?\n/);
-    var fallback = null;
+    var sky = [], other = [];
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         if (line.indexOf("#EXTINF") !== 0) continue;
@@ -577,10 +582,13 @@ function findLiveStreamUrl(body) {
         if (!next || next.charAt(0) === "#") continue;
         if (next.indexOf("//") === 0) next = "http:" + next;
         if (next.indexOf("http://") !== 0 && next.indexOf("https://") !== 0) continue;
-        if (/sky\s*sports/i.test(line)) return next;
-        if (!fallback) fallback = next;
+        if (/sky\s*sports/i.test(line)) {
+            if (sky.length < max && sky.indexOf(next) === -1) sky.push(next);
+        } else {
+            if (other.length < max && other.indexOf(next) === -1) other.push(next);
+        }
     }
-    return fallback;
+    return sky.concat(other).slice(0, max);
 }
 
 /** The follow-up request that proves the candidate actually serves the channel it advertises. */
@@ -702,7 +710,7 @@ function discover(host) {
     // at once via host.httpGetAll (the host fans the network I/O across a thread pool), so a scan
     // pays roughly one request's latency per round instead of per provider. A domain is settled
     // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports
-    // AND a live channel URL pulled from that playlist actually streams bytes back
+    // AND one of up to MAX_STREAM_PROBES live channel URLs pulled from that playlist streams
     // (a second probe batch per round), else skipped. Only a dead login leaves the domain open
     // for its next login in the following round - one bad credential shouldn't write off a whole
     // provider.
@@ -751,22 +759,25 @@ function discover(host) {
         host.reportProgress("Round " + round + "/" + MAX_ROUNDS + ": testing " + roundReqs.length + " domain(s) in parallel…");
         var responses = host.httpGetAll(roundReqs);
 
-        // First pass: content checks. Anything that passes gets a second, real stream probe -
-        // one small Range request at an actual live channel URL from its playlist - before it is
-        // accepted, because a playlist that lists Sky Sports can still serve nothing.
+        // First pass: content checks. Anything that passes gets up to MAX_STREAM_PROBES follow-up
+        // probes - small Range requests at real channel URLs from its playlist - and is accepted
+        // if ANY of them streams: a playlist that lists Sky Sports can serve nothing, but one
+        // dead channel row (or the CDN behind it) says nothing about the rest of the panel.
         var results = [];
-        var probeReqs = [], probeIndexes = [], probeLabels = [];
+        var probeReqs = [], probeOwner = [], probeUrls = [];
         for (var j = 0; j < roundCreds.length; j++) {
             var result = evalResponse(roundCreds[j], responses[j]);
             results.push(result);
             if (result.online && roundCreds[j].type !== "stalker") {
                 // Stalker has no playlist here, so there is no channel URL to probe without a
                 // full handshake - it keeps its portal-reachable acceptance.
-                var streamUrl = findLiveStreamUrl((responses[j] || {}).body || "");
-                if (streamUrl) {
-                    probeReqs.push(buildStreamProbeRequest(streamUrl));
-                    probeIndexes.push(j);
-                    probeLabels.push(roundDomains[j]);
+                var streamUrls = findLiveStreamUrls((responses[j] || {}).body || "", MAX_STREAM_PROBES);
+                if (streamUrls.length > 0) {
+                    for (var v = 0; v < streamUrls.length; v++) {
+                        probeReqs.push(buildStreamProbeRequest(streamUrls[v]));
+                        probeOwner.push(j);
+                        probeUrls.push(streamUrls[v]);
+                    }
                 } else {
                     result.online = false;
                     result.error = "No playable live channel in playlist";
@@ -774,17 +785,31 @@ function discover(host) {
             }
         }
         if (probeReqs.length > 0) {
-            host.reportProgress("Round " + round + "/" + MAX_ROUNDS + ": confirming " + probeReqs.length + " live stream(s)…");
+            var probeOwners = [], seenOwner = {};
+            for (var o = 0; o < probeOwner.length; o++) {
+                if (!seenOwner[probeOwner[o]]) { seenOwner[probeOwner[o]] = true; probeOwners.push(probeOwner[o]); }
+            }
+            host.reportProgress("Round " + round + "/" + MAX_ROUNDS + ": confirming " + probeOwners.length + " provider(s) (up to " + MAX_STREAM_PROBES + " live channel(s) each)…");
             var probeResponses = host.httpGetAll(probeReqs);
-            for (var p = 0; p < probeIndexes.length; p++) {
-                var r = results[probeIndexes[p]];
+            var probePassed = {}, probeFirstFail = {}, probeTried = {};
+            for (var p = 0; p < probeReqs.length; p++) {
+                var owner = probeOwner[p];
+                probeTried[owner] = (probeTried[owner] || 0) + 1;
+                if (probePassed[owner]) continue; // an earlier channel for this provider already streamed
                 if (evalStreamProbe(probeResponses[p])) {
-                    r.streamChecked = true;
-                } else {
-                    r.online = false;
-                    r.error = "Live stream probe failed (HTTP " + (((probeResponses[p] || {}).status) || 0) + ")";
-                    host.log("reddit: stream probe FAILED domain=" + probeLabels[p] + " code=" + (((probeResponses[p] || {}).status) || 0) + " url=" + (((probeReqs[p] || {}).url) || "").substring(0, 100));
+                    probePassed[owner] = true;
+                    results[owner].streamChecked = true;
+                } else if (!probeFirstFail[owner]) {
+                    probeFirstFail[owner] = { status: ((probeResponses[p] || {}).status) || 0, url: probeUrls[p] };
                 }
+            }
+            for (var q = 0; q < probeOwners.length; q++) {
+                var ownerIdx = probeOwners[q];
+                if (probePassed[ownerIdx]) continue;
+                var fail = probeFirstFail[ownerIdx] || { status: 0, url: "" };
+                results[ownerIdx].online = false;
+                results[ownerIdx].error = "Live stream probe failed (HTTP " + fail.status + ", " + (probeTried[ownerIdx] || 0) + " channel(s) tried)";
+                host.log("reddit: stream probes FAILED domain=" + roundDomains[ownerIdx] + " code=" + fail.status + " tried=" + (probeTried[ownerIdx] || 0) + " firstUrl=" + (fail.url || "").substring(0, 100));
             }
         }
 
