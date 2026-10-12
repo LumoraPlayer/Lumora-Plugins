@@ -502,7 +502,7 @@ function buildM3uUrl(cred) {
     return cred.url;
 }
 
-var M3U_RANGE = "bytes=0-5242879"; // big enough to reach Sky Sports rows in an m3u_plus
+var M3U_RANGE = "bytes=0-5242879"; // enough of a big m3u_plus to cover plenty of channel rows
 
 // The request a credential's live test needs, as { url, headers, timeoutMs } for host.httpGetAll.
 // Splitting "build the request" from "evaluate the response" is what lets the discover loop fire a
@@ -535,22 +535,20 @@ function evalResponse(cred, resp) {
     var ok = resp.status >= 200 && resp.status < 300;
     if (cred.type === "stalker") {
         var valid = ok && body.length > 50;
-        // Stalker portals aren't M3U, so the Sky content check doesn't apply - reachable = accepted.
-        return { credential: cred, online: valid, reachable: valid, hasSky: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
+        // Stalker portals aren't M3U and expose no channel list to inspect - reachable = accepted.
+        return { credential: cred, online: valid, reachable: valid, responseCode: resp.status, error: valid ? null : "Portal not responding" };
     }
     var isM3u = body.indexOf("#EXTM3U") === 0 || body.indexOf("#EXTINF") === 0 || body.indexOf("#KODIPROP") !== -1;
-    // reachable = credentials work and the server returned a real playlist, whether or not it
-    // carries the required content. hasSky is the separate content requirement.
+    // reachable = credentials work and the server returned a real playlist. An Xtream candidate
+    // is online as soon as it is reachable; the live stream probe in the discover loop still has
+    // to confirm an actual channel streams before the provider is accepted.
     var reachable = ok && (isM3u || body.length > 100);
-    var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
     var error = null;
     if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
-    else if (reachable && !hasSky) error = "No Sky Sports channels";
     return {
         credential: cred,
-        online: reachable && hasSky,
+        online: reachable,
         reachable: reachable,
-        hasSky: hasSky,
         responseCode: resp.status,
         error: error,
     };
@@ -558,18 +556,16 @@ function evalResponse(cred, resp) {
 
 // ── Live stream confirmation ──
 //
-// A playlist that lists Sky Sports is not the same as a panel that serves it: credentials can
+// A playlist that answers is not the same as a panel that serves it: credentials can
 // be expired mid-playlist (the endpoint answers, the streams 401), the connection limit can be
 // reached, or the channel rows can point at a dead CDN. The old evaluator accepted any of those.
 // These helpers pull a real channel URL out of the already-fetched playlist and send one small
 // Range request at it, so "accepted" means bytes for a live channel actually arrived.
 
-/** First live channel URL in a fetched m3u_plus body: a Sky Sports row if there is one, else
- *  the first playable channel row. Only absolute http(s) (and //host) URLs - a relative path
- *  can't be probed without resolving it against the panel. */
+/** First live channel URL in a fetched m3u_plus body. Only absolute http(s) (and //host) URLs -
+ *  a relative path can't be probed without resolving it against the panel. */
 function findLiveStreamUrl(body) {
     var lines = body.split(/\r?\n/);
-    var fallback = null;
     for (var i = 0; i < lines.length; i++) {
         var line = lines[i];
         if (line.indexOf("#EXTINF") !== 0) continue;
@@ -577,10 +573,9 @@ function findLiveStreamUrl(body) {
         if (!next || next.charAt(0) === "#") continue;
         if (next.indexOf("//") === 0) next = "http:" + next;
         if (next.indexOf("http://") !== 0 && next.indexOf("https://") !== 0) continue;
-        if (/sky\s*sports/i.test(line)) return next;
-        if (!fallback) fallback = next;
+        return next;
     }
-    return fallback;
+    return null;
 }
 
 /** The follow-up request that proves the candidate actually serves the channel it advertises. */
@@ -701,8 +696,8 @@ function discover(host) {
     // A round takes the next untried login from every still-unresolved domain and fires them all
     // at once via host.httpGetAll (the host fans the network I/O across a thread pool), so a scan
     // pays roughly one request's latency per round instead of per provider. A domain is settled
-    // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports
-    // AND a live channel URL pulled from that playlist actually streams bytes back
+    // the moment one of its logins reaches the server: accepted if a live channel URL pulled
+    // from its playlist actually streams bytes back
     // (a second probe batch per round), else skipped. Only a dead login leaves the domain open
     // for its next login in the following round - one bad credential shouldn't write off a whole
     // provider.
@@ -717,9 +712,9 @@ function discover(host) {
         if (!byDomain[d0]) { byDomain[d0] = []; domainOrder.push(d0); }
         byDomain[d0].push(unique[i]);
     }
-    var resolvedDomains = {}; // domain -> "accepted" | "nosky"
+    var resolvedDomains = {}; // domain -> "accepted" | "rejected"
     var cursor = {};          // domain -> index of its next untried login
-    var workingCount = 0, noSkyCount = 0, testedCount = 0, round = 0, stoppedEarly = false;
+    var workingCount = 0, rejectedCount = 0, testedCount = 0, round = 0, stoppedEarly = false;
     host.reportProgress("Testing " + domainOrder.length + " domain(s)…");
 
     function hasPendingWork() {
@@ -753,7 +748,7 @@ function discover(host) {
 
         // First pass: content checks. Anything that passes gets a second, real stream probe -
         // one small Range request at an actual live channel URL from its playlist - before it is
-        // accepted, because a playlist that lists Sky Sports can still serve nothing.
+        // accepted, because a playlist that answers can still serve nothing.
         var results = [];
         var probeReqs = [], probeIndexes = [], probeLabels = [];
         for (var j = 0; j < roundCreds.length; j++) {
@@ -799,17 +794,17 @@ function discover(host) {
                 resolvedDomains[domain] = "accepted";
                 host.reportProgress("✓ " + domain + " accepted — live channel plays (" + workingCount + " working)");
             } else if (result.reachable) {
-                noSkyCount++;
-                resolvedDomains[domain] = "nosky";
-                host.reportProgress("✗ " + domain + " skipped — " + (result.error || "no Sky Sports"));
+                rejectedCount++;
+                resolvedDomains[domain] = "rejected";
+                host.reportProgress("✗ " + domain + " skipped — " + (result.error || "stream probe failed"));
             }
             // else: dead login - domain left open for its next login next round.
         }
     }
     var domainCount = Object.keys(resolvedDomains).length;
-    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount + " stoppedEarly=" + stoppedEarly);
+    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " rejected=" + rejectedCount + " resolvedDomains=" + domainCount + " stoppedEarly=" + stoppedEarly);
     var suffix = stoppedEarly ? " (stopped after " + MAX_ROUNDS + " rounds)" : "";
     return workingCount === 0
-        ? "Tested " + testedCount + " credential(s), none had Sky Sports" + suffix
+        ? "Tested " + testedCount + " credential(s), no live streams confirmed" + suffix
         : "Found " + workingCount + " working provider(s)" + suffix;
 }
