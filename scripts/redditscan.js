@@ -542,7 +542,7 @@ function evalResponse(cred, resp) {
     // reachable = credentials work and the server returned a real playlist, whether or not it
     // carries the required content. hasSky is the separate content requirement.
     var reachable = ok && (isM3u || body.length > 100);
-    var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
+    var hasSky = /sky\s*sports/i.test(body);
     var error = null;
     if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
     else if (reachable && !hasSky) error = "No Sky Sports channels";
@@ -719,7 +719,7 @@ function discover(host) {
     }
     var resolvedDomains = {}; // domain -> "accepted" | "nosky"
     var cursor = {};          // domain -> index of its next untried login
-    var workingCount = 0, noSkyCount = 0, testedCount = 0, round = 0, stoppedEarly = false;
+    var workingCount = 0, noSkyCount = 0, skyFailCount = 0, deadCount = 0, testedCount = 0, round = 0, stoppedEarly = false;
     host.reportProgress("Testing " + domainOrder.length + " domain(s)…");
 
     function hasPendingWork() {
@@ -792,24 +792,27 @@ function discover(host) {
             var cred = roundCreds[j], domain = roundDomains[j];
             var result = results[j];
             testedCount++;
-            host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " online=" + result.online + " reachable=" + result.reachable + " streamChecked=" + (!!result.streamChecked) + " code=" + result.responseCode + " error=" + (result.error || "none"));
+            host.log("reddit: test[" + testedCount + "] type=" + cred.type + " url=" + domain + " online=" + result.online + " reachable=" + result.reachable + " sky=" + result.hasSky + " streamChecked=" + (!!result.streamChecked) + " code=" + result.responseCode + " len=" + ((((responses[j] || {}).body) || "").length) + " error=" + (result.error || "none"));
             if (result.online) {
                 host.reportCandidate(toCandidate(result));
                 workingCount++;
                 resolvedDomains[domain] = "accepted";
                 host.reportProgress("✓ " + domain + " accepted — live channel plays (" + workingCount + " working)");
             } else if (result.reachable) {
-                noSkyCount++;
+                if (result.hasSky) skyFailCount++; else noSkyCount++;
                 resolvedDomains[domain] = "nosky";
                 host.reportProgress("✗ " + domain + " skipped — " + (result.error || "no Sky Sports"));
+            } else {
+                // Dead login - the domain was left open for its next login in the following
+                // round, but never reached one by the end of the run.
+                deadCount++;
             }
-            // else: dead login - domain left open for its next login next round.
         }
     }
     var domainCount = Object.keys(resolvedDomains).length;
-    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " resolvedDomains=" + domainCount + " stoppedEarly=" + stoppedEarly);
+    host.log("reddit: rounds=" + round + " tested=" + testedCount + " working=" + workingCount + " noSky=" + noSkyCount + " skyFail=" + skyFailCount + " dead=" + deadCount + " resolvedDomains=" + domainCount + " stoppedEarly=" + stoppedEarly);
     var suffix = stoppedEarly ? " (stopped after " + MAX_ROUNDS + " rounds)" : "";
     return workingCount === 0
-        ? "Tested " + testedCount + " credential(s), none had Sky Sports" + suffix
+        ? "No working providers: " + testedCount + " tested — " + noSkyCount + " no Sky, " + skyFailCount + " Sky but no live stream, " + deadCount + " dead/unreachable" + suffix
         : "Found " + workingCount + " working provider(s)" + suffix;
 }
