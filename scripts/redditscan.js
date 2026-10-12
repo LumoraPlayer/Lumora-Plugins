@@ -14,7 +14,11 @@ PLUGIN = {
 var SUBREDDIT = "IPTV_ZONENEW";
 var CLIENT_IDS = ["ohXpoqrZYub1kg", "NOe2iKrPPzwscA"];
 var OAUTH_UA = "RedditScanPlugin/1.0";
-var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+var MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+// The /new listing is newest-first; pages are chained via its `after` cursor only until a
+// non-stickied post outside the 14-day window shows up. MAX_PAGES is the hard ceiling for a
+// subreddit busy enough that the window alone wouldn't stop the walk (100 posts per page).
+var MAX_PAGES = 10;
 // Testing every login of every domain is thousands of requests and hours of wall time (a scan
 // regularly parses ~10k credentials across ~60 domains), so the probe loop is deliberately
 // bounded: at most MAX_ROUNDS logins per domain, and each probe gets PROBE_TIMEOUT_MS via the
@@ -117,57 +121,72 @@ function scrapeComments(children, urlSet) {
 }
 
 function fetchPostsOAuth(token, posts, urlSet) {
-    var pageUrl = "https://oauth.reddit.com/r/" + SUBREDDIT + "/new?limit=100&sort=new&raw_json=1";
-    var jsonStr = fetchOAuth(pageUrl, token);
-    if (!jsonStr) {
-        host.log("reddit: fetchPostsOAuth - no response body");
-        return;
-    }
-    var root = JSON.parse(jsonStr);
-    var children = root && root.data && root.data.children;
-    if (!children) {
-        host.log("reddit: fetchPostsOAuth - no children in response, keys=" + Object.keys(root || {}).join(","));
-        return;
-    }
-    host.log("reddit: fetchPostsOAuth - " + children.length + " children");
-
+    var baseUrl = "https://oauth.reddit.com/r/" + SUBREDDIT + "/new?limit=100&sort=new&raw_json=1";
+    var pageUrl = baseUrl;
     var now = Date.now();
-    var kept = 0;
-    for (var i = 0; i < children.length; i++) {
-        var postData = children[i] && children[i].data;
-        if (!postData) continue;
-        var created = (postData.created_utc || 0) * 1000;
-        if (!created || now - created > MAX_AGE_MS) continue;
-
-        var id = postData.id || "";
-        var permalink = postData.permalink || "";
-        if (!id || !permalink) continue;
-        var title = postData.title || "";
-        var selftext = postData.selftext || "";
-        var fullPermalink = "https://www.reddit.com" + permalink;
-        posts.push({ id: id, title: title, selftext: selftext, permalink: fullPermalink });
-        kept++;
-
-        findPasteUrls(title + " " + selftext, urlSet);
-
-        try {
-            // Comments must be fetched through oauth.reddit.com, not www.reddit.com - the
-            // OAuth bearer token is only accepted on the API host, so this 403s on every
-            // single post otherwise (verified against real device logs: every comment fetch
-            // failed, silently, while everything else in the run succeeded).
-            var cJson = fetchOAuth("https://oauth.reddit.com" + permalink + ".json?raw_json=1", token);
-            if (cJson) {
-                var cArray = JSON.parse(cJson);
-                if (Array.isArray(cArray) && cArray.length > 1) {
-                    var cChildren = cArray[1] && cArray[1].data && cArray[1].data.children;
-                    if (cChildren) scrapeComments(cChildren, urlSet);
-                }
-            }
-        } catch (e) {
-            // comment tree fetch/parse failed - the post itself was already scanned
+    var kept = 0, ignored = 0, pages = 0, stoppedAtEdge = false;
+    while (pageUrl && pages < MAX_PAGES) {
+        pages++;
+        var jsonStr = fetchOAuth(pageUrl, token);
+        if (!jsonStr) {
+            host.log("reddit: fetchPostsOAuth - no response body (page " + pages + ")");
+            break;
         }
+        var root = JSON.parse(jsonStr);
+        var listing = root && root.data;
+        var children = listing && listing.children;
+        if (!children) {
+            host.log("reddit: fetchPostsOAuth - no children in response, keys=" + Object.keys(root || {}).join(","));
+            break;
+        }
+        host.log("reddit: fetchPostsOAuth page " + pages + " - " + children.length + " children");
+
+        for (var i = 0; i < children.length; i++) {
+            var postData = children[i] && children[i].data;
+            if (!postData) continue;
+            var created = (postData.created_utc || 0) * 1000;
+            if (!created) continue;
+            if (now - created > MAX_AGE_MS) {
+                // Newest-first, so the first post outside the window means the ones after it are
+                // too - don't fetch another page. Stickies are pinned regardless of age, so they
+                // don't count as the edge.
+                ignored++;
+                if (!postData.stickied) stoppedAtEdge = true;
+                continue;
+            }
+
+            var id = postData.id || "";
+            var permalink = postData.permalink || "";
+            if (!id || !permalink) continue;
+            var title = postData.title || "";
+            var selftext = postData.selftext || "";
+            var fullPermalink = "https://www.reddit.com" + permalink;
+            posts.push({ id: id, title: title, selftext: selftext, permalink: fullPermalink });
+            kept++;
+
+            findPasteUrls(title + " " + selftext, urlSet);
+
+            try {
+                // Comments must be fetched through oauth.reddit.com, not www.reddit.com - the
+                // OAuth bearer token is only accepted on the API host, so this 403s on every
+                // single post otherwise (verified against real device logs: every comment fetch
+                // failed, silently, while everything else in the run succeeded).
+                var cJson = fetchOAuth("https://oauth.reddit.com" + permalink + ".json?raw_json=1", token);
+                if (cJson) {
+                    var cArray = JSON.parse(cJson);
+                    if (Array.isArray(cArray) && cArray.length > 1) {
+                        var cChildren = cArray[1] && cArray[1].data && cArray[1].data.children;
+                        if (cChildren) scrapeComments(cChildren, urlSet);
+                    }
+                }
+            } catch (e) {
+                // comment tree fetch/parse failed - the post itself was already scanned
+            }
+        }
+        if (stoppedAtEdge) break;
+        pageUrl = listing.after ? baseUrl + "&after=" + encodeURIComponent(listing.after) : null;
     }
-    host.log("reddit: fetchPostsOAuth - kept=" + kept + " urlsSoFar=" + Object.keys(urlSet).length + " ignored=" + (children.length - kept) + " (older than window)");
+    host.log("reddit: fetchPostsOAuth - pages=" + pages + " kept=" + kept + " ignored=" + ignored + (stoppedAtEdge ? " (stopped at window edge)" : "") + " urlsSoFar=" + Object.keys(urlSet).length);
 }
 
 function redditScan() {
@@ -483,7 +502,7 @@ function buildM3uUrl(cred) {
     return cred.url;
 }
 
-var M3U_RANGE = "bytes=0-5242879"; // big enough to reach Sky Sports/UK rows in an m3u_plus
+var M3U_RANGE = "bytes=0-5242879"; // big enough to reach Sky Sports rows in an m3u_plus
 
 // The request a credential's live test needs, as { url, headers, timeoutMs } for host.httpGetAll.
 // Splitting "build the request" from "evaluate the response" is what lets the discover loop fire a
@@ -516,26 +535,22 @@ function evalResponse(cred, resp) {
     var ok = resp.status >= 200 && resp.status < 300;
     if (cred.type === "stalker") {
         var valid = ok && body.length > 50;
-        // Stalker portals aren't M3U, so the Sky/UK-EN content checks don't apply - reachable = accepted.
-        return { credential: cred, online: valid, reachable: valid, hasSky: true, hasUkEn: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
+        // Stalker portals aren't M3U, so the Sky content check doesn't apply - reachable = accepted.
+        return { credential: cred, online: valid, reachable: valid, hasSky: true, responseCode: resp.status, error: valid ? null : "Portal not responding" };
     }
     var isM3u = body.indexOf("#EXTM3U") === 0 || body.indexOf("#EXTINF") === 0 || body.indexOf("#KODIPROP") !== -1;
     // reachable = credentials work and the server returned a real playlist, whether or not it
-    // carries the required content. hasSky/hasUkEn are the separate content requirements.
+    // carries the required content. hasSky is the separate content requirement.
     var reachable = ok && (isM3u || body.length > 100);
     var hasSky = body.toLowerCase().indexOf("sky sports") !== -1;
-    // UK/EN as a whole token inside a group-title value, so ENTERTAINMENT/UKRAINE don't false-match.
-    var hasUkEn = /group-title="[^"]*\b(?:uk|en)\b/i.test(body);
     var error = null;
     if (ok && !isM3u && body.length < 100) error = "Not a valid M3U response";
     else if (reachable && !hasSky) error = "No Sky Sports channels";
-    else if (reachable && !hasUkEn) error = "No UK/EN channels";
     return {
         credential: cred,
-        online: reachable && hasSky && hasUkEn,
+        online: reachable && hasSky,
         reachable: reachable,
         hasSky: hasSky,
-        hasUkEn: hasUkEn,
         responseCode: resp.status,
         error: error,
     };
@@ -550,8 +565,8 @@ function evalResponse(cred, resp) {
 // Range request at it, so "accepted" means bytes for a live channel actually arrived.
 
 /** First live channel URL in a fetched m3u_plus body: a Sky Sports row if there is one, else
- *  the first UK/EN-group row. Only absolute http(s) (and //host) URLs - a relative path can't be
- *  probed without resolving it against the panel. */
+ *  the first playable channel row. Only absolute http(s) (and //host) URLs - a relative path
+ *  can't be probed without resolving it against the panel. */
 function findLiveStreamUrl(body) {
     var lines = body.split(/\r?\n/);
     var fallback = null;
@@ -563,7 +578,7 @@ function findLiveStreamUrl(body) {
         if (next.indexOf("//") === 0) next = "http:" + next;
         if (next.indexOf("http://") !== 0 && next.indexOf("https://") !== 0) continue;
         if (/sky\s*sports/i.test(line)) return next;
-        if (!fallback && /group-title="[^"]*\b(?:uk|en)\b/i.test(line)) fallback = next;
+        if (!fallback) fallback = next;
     }
     return fallback;
 }
@@ -686,8 +701,8 @@ function discover(host) {
     // A round takes the next untried login from every still-unresolved domain and fires them all
     // at once via host.httpGetAll (the host fans the network I/O across a thread pool), so a scan
     // pays roughly one request's latency per round instead of per provider. A domain is settled
-    // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports +
-    // a UK/EN group AND a live channel URL pulled from that playlist actually streams bytes back
+    // the moment one of its logins reaches the server: accepted if the playlist has Sky Sports
+    // AND a live channel URL pulled from that playlist actually streams bytes back
     // (a second probe batch per round), else skipped. Only a dead login leaves the domain open
     // for its next login in the following round - one bad credential shouldn't write off a whole
     // provider.
@@ -786,7 +801,7 @@ function discover(host) {
             } else if (result.reachable) {
                 noSkyCount++;
                 resolvedDomains[domain] = "nosky";
-                host.reportProgress("✗ " + domain + " skipped — " + (result.error || "no Sky/UK-EN"));
+                host.reportProgress("✗ " + domain + " skipped — " + (result.error || "no Sky Sports"));
             }
             // else: dead login - domain left open for its next login next round.
         }
