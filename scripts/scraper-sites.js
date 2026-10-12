@@ -30,7 +30,8 @@
 // title, so the app skips them unless the title is itself anime - roughly half the list was
 // being queried for films it could never carry.
 //
-// `heavy: true` marks a site whose search goes through the Cloudflare WebView bypass: a full
+// `heavy: true` marks a site whose find pass goes through the Cloudflare WebView bypass - its
+// search, or the per-agent stream resolution that runs inside the same pass. That is a full
 // Chromium page load per query, by far the most expensive step here. Those are held back and
 // only queried if the cheap sites came up empty.
 //
@@ -50,7 +51,7 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 4;
+var VERSION = 5;
 
 var SITES = [
     { name: "AfterDark", language: "en", enabled: false, note: "baseUrl not yet known - fill in before enabling.", baseUrl: "", extra: { logo: "https://images2.imgbox.com/f5/45/6Es7LVQ6_o.png" } },
@@ -70,6 +71,7 @@ var SITES = [
     { name: "Cine24h", language: "es", enabled: true, baseUrl: "https://cine24h.online", heavy: true },
     { name: "CineCalidad", language: "es", enabled: true, baseUrl: "https://www.cinecalidad.ec", extra: { logo: "https://www.cinecalidad.ec/wp-content/themes/Cinecalidad/assets/img/logo.png" } },
     { name: "CineHax", language: "es", enabled: true, baseUrl: "https://cinehax.com", extra: { logo: "https://cinehax.com/wp-content/uploads/2026/06/cropped-favicon-192x192.jpg", unlimplayHost: "unlimplay.com", remuxHost: "remux.unlimplay.com" } },
+    { name: "CineLite", language: "en", enabled: true, baseUrl: "https://cinelite.xyz", heavy: true, extra: { logo: "https://cinelite.xyz/favicon.png", apiUrl: "https://api.cinelite.xyz", embedUrl: "https://embed.cinelite.xyz" } },
     { name: "Cuevana 3", language: "es", enabled: true, domainKey: "cuevana", baseUrl: "https://cuevana.gs" },
     { name: "Doramasflix", language: "es", enabled: true, baseUrl: "https://doramasflix.in", anime: true, extra: { apiUrl: "https://sv1.fluxcedene.net/api/", fkPlayerDecodingUrl: "https://fkplayer.xyz/api/decoding", logo: "https://doramasflix.in/img/logo.png" } },
     { name: "Einschalten", language: "de", enabled: true, baseUrl: "https://einschalten.in" },
