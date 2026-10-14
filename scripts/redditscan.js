@@ -664,8 +664,14 @@ function evalResponse(cred, resp) {
 // be expired mid-playlist (the endpoint answers, the streams 401), the connection limit can be
 // reached, or the channel rows can point at a dead CDN. The old evaluator accepted any of those.
 // These helpers pull up to MAX_STREAM_PROBES real channel URLs out of the already-fetched
-// playlist and send one small Range request at each, so "accepted" means bytes for a live
-// channel actually arrived - and a provider is only rejected once every probed channel failed.
+// playlist and send one small Range request at each, so "accepted" means a channel's own bytes
+// came back - and a provider is only rejected once every probed channel failed.
+//
+// "Bytes came back" has to mean bytes of a stream, not just any 2xx. A panel whose stream layer
+// is dead, or was never there, answers those URLs with a 200 and an HTML notice, an empty
+// "#EXTM3U" stub or a JSON error far more often than with an honest 404 - and a probe that
+// accepted those accepted panels nothing can play from: the app 404s the same URLs, every
+// channel reads as offline, and the scan's "live channel OK" turns out to have verified nothing.
 
 /** Up to `max` live channel URLs from a fetched m3u_plus body, Sky Sports rows first (then the
  *  rest in playlist order, deduplicated) so a dead Sky row can fall back to another channel.
@@ -705,12 +711,58 @@ function buildStreamProbeRequest(url) {
     };
 }
 
-/** A 2xx with either an HLS manifest (panel resolves the channel) or bytes (direct .ts feed). */
+var TS_PACKET_BYTES = 188;
+// How many packet boundaries in a row must carry the MPEG-TS sync byte for a body to count as a
+// direct .ts feed. Five in a row is not proof, but nothing a panel actually answers with by
+// mistake - an HTML page, a JSON error, an empty stub - can do it.
+var TS_EXPECTED_PACKETS = 5;
+// Prefix scanned for that run. The body arrives as UTF-8-decoded text, so where the binary
+// happens to form valid multi-byte sequences the 188-byte grid shifts; a small prefix is enough
+// to find an aligned run without walking a whole segment.
+var TS_SCAN_PREFIX = 4096;
+
+/** True for what a panel serves on a live channel URL: MPEG-TS packets, 188 bytes each, every
+ *  packet starting with the 0x47 sync byte. */
+function looksLikeMpegTs(body) {
+    var lastStart = Math.min(TS_SCAN_PREFIX, body.length - TS_PACKET_BYTES * (TS_EXPECTED_PACKETS - 1));
+    for (var start = 0; start <= lastStart; start++) {
+        if (body.charCodeAt(start) !== 0x47) continue;
+        var aligned = true;
+        for (var k = 1; k < TS_EXPECTED_PACKETS; k++) {
+            var at = start + TS_PACKET_BYTES * k;
+            if (at >= body.length || body.charCodeAt(at) !== 0x47) { aligned = false; break; }
+        }
+        if (aligned) return true;
+    }
+    return false;
+}
+
+/** True for an HLS manifest that lists something. A manifest with no rows - several panels answer
+ *  a dead channel with exactly "#EXTM3U" plus "#EXT-X-ENDLIST" - is the channel being offline, not
+ *  a stream: a live media playlist carries #EXTINF segment rows and a master playlist carries
+ *  #EXT-X-STREAM-INF variants, so one of the two has to be there. */
+function looksLikeHlsManifest(body) {
+    var text = body.replace(/^\uFEFF/, "").replace(/^\s+/, "");
+    if (text.indexOf("#EXTM3U") !== 0) return false;
+    return text.indexOf("#EXTINF") !== -1 || text.indexOf("#EXT-X-STREAM-INF") !== -1;
+}
+
+/** Whether a probe response is a stream this panel can actually serve, as {ok, reason}. The
+ *  reason is what the run's log line and the discovery page say the response was instead - "an
+ *  HTML page, not a stream" is the answer a dead panel used to hide behind a bare 2xx. */
 function evalStreamProbe(resp) {
     resp = resp || { status: 0, body: "" };
-    var ok = resp.status >= 200 && resp.status < 300;
+    var status = resp.status || 0;
     var body = resp.body || "";
-    return ok && (body.indexOf("#EXTM3U") === 0 || body.length > 0);
+    if (!(status >= 200 && status < 300)) return { ok: false, reason: "" };
+    if (body.length === 0) return { ok: false, reason: "an empty body" };
+    if (looksLikeHlsManifest(body)) return { ok: true, reason: "HLS manifest" };
+    if (looksLikeMpegTs(body)) return { ok: true, reason: "MPEG-TS packets" };
+    var head = body.substring(0, 512).replace(/^\uFEFF/, "").trim().toLowerCase();
+    if (head.charAt(0) === "<") return { ok: false, reason: "an HTML page, not a stream" };
+    if (head.charAt(0) === "{" || head.charAt(0) === "[") return { ok: false, reason: "a JSON answer, not a stream" };
+    if (head.indexOf("#extm3u") === 0) return { ok: false, reason: "an HLS manifest with no channels in it" };
+    return { ok: false, reason: "neither HLS nor MPEG-TS (" + body.length + " bytes)" };
 }
 
 function domainOf(url) {
@@ -936,20 +988,21 @@ function discover(host) {
                 var owner = probeOwner[p];
                 probeTried[owner] = (probeTried[owner] || 0) + 1;
                 if (probePassed[owner]) continue; // an earlier channel for this provider already streamed
-                if (evalStreamProbe(probeResponses[p])) {
+                var verdict = evalStreamProbe(probeResponses[p]);
+                if (verdict.ok) {
                     probePassed[owner] = true;
                     results[owner].streamChecked = true;
                 } else if (!probeFirstFail[owner]) {
-                    probeFirstFail[owner] = { status: ((probeResponses[p] || {}).status) || 0, url: probeUrls[p] };
+                    probeFirstFail[owner] = { status: ((probeResponses[p] || {}).status) || 0, url: probeUrls[p], reason: verdict.reason };
                 }
             }
             for (var q = 0; q < probeOwners.length; q++) {
                 var ownerIdx = probeOwners[q];
                 if (probePassed[ownerIdx]) continue;
-                var fail = probeFirstFail[ownerIdx] || { status: 0, url: "" };
+                var fail = probeFirstFail[ownerIdx] || { status: 0, url: "", reason: "no channel answered" };
                 results[ownerIdx].online = false;
-                results[ownerIdx].error = "Live stream probe failed (HTTP " + fail.status + ", " + (probeTried[ownerIdx] || 0) + " channel(s) tried)";
-                host.log("reddit: stream probes FAILED domain=" + roundDomains[ownerIdx] + " code=" + fail.status + " tried=" + (probeTried[ownerIdx] || 0) + " firstUrl=" + (fail.url || "").substring(0, 100));
+                results[ownerIdx].error = "Live stream probe failed (HTTP " + fail.status + ", " + (probeTried[ownerIdx] || 0) + " channel(s) tried" + (fail.reason ? ": " + fail.reason : "") + ")";
+                host.log("reddit: stream probes FAILED domain=" + roundDomains[ownerIdx] + " code=" + fail.status + " tried=" + (probeTried[ownerIdx] || 0) + " reason=" + (fail.reason || "none") + " firstUrl=" + (fail.url || "").substring(0, 100));
             }
         }
 
