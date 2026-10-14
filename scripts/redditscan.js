@@ -29,6 +29,34 @@ var PROBE_TIMEOUT_MS = 15000;
 // How many channel URLs one candidate may probe before it is written off as non-streaming. One
 // dead row - or a dead CDN behind the first row - says nothing about the rest of the panel.
 var MAX_STREAM_PROBES = 3;
+// Every request in the scan and paste phases carries a per-request deadline (the host's
+// timeoutMs): the shared client's 30s connect / 60s read defaults are far too long when a run
+// makes hundreds of calls - a couple of stalled responses used to burn minutes of the app's
+// 5-minute discovery budget on their own.
+var REDDIT_TIMEOUT_MS = 12000;
+var PASTE_TIMEOUT_MS = 15000;
+// host.httpGetAll fans out at most 8 requests at once; comment trees and paste bodies are
+// hundreds of KB each, so chunks stay one pool-wave deep to bound a batch's aggregate memory.
+var BATCH_SIZE = 8;
+// Request-count bounds for the scan phase. The /new walk is newest-first and the freshest posts
+// carry the credentials most likely to still work, and testing only ever tries MAX_ROUNDS logins
+// per domain - nothing is gained from comment-fetching (or paste-fetching) a thousand posts,
+// while every request saved is time back. Count matters as much as latency here: reddit's OAuth
+// budget is ~100 requests/minute per client ID, so the phase is request-bound near that ceiling.
+var MAX_COMMENT_FETCHES = 150;
+var MAX_PASTE_URLS = 60;
+// A post whose selftext already yielded paste links had them harvested without a request; the
+// comment tree under it is usually reactions, so its fetch is skipped. Flip to false for
+// completeness over speed.
+var SKIP_COMMENTS_WHEN_SELFTEXT_HAS_PASTES = true;
+// Comment fetching is abandoned after this many 429s - reddit is rate-limiting the client, and
+// continuing would only spend budget on responses that carry nothing.
+var MAX_COMMENT_429 = 10;
+// Wall-clock caps for the scan and paste phases, leaving at least half of the 5-minute discovery
+// budget for the provider testing that actually produces candidates. Checked between network
+// batches, never mid-request; whatever was collected when a cap is hit is still used.
+var SCAN_BUDGET_MS = 90000;
+var PASTE_BUDGET_MS = 60000;
 
 var PASTE_DOMAINS = ["paste.sh", "pastebin.com", "rentry.co", "justpaste.it", "controlc.com", "pastes.dev", "text.is"];
 var PASTE_URL_REGEX = new RegExp(
@@ -55,7 +83,7 @@ function getOAuthToken() {
                 "User-Agent": OAUTH_UA,
                 "Authorization": "Basic " + auth,
                 "Content-Type": "application/x-www-form-urlencoded",
-            });
+            }, REDDIT_TIMEOUT_MS);
             host.log("reddit: oauth[" + i + "] status=" + resp.status + " len=" + (resp.body||"").length);
             if (resp.status >= 200 && resp.status < 300) {
                 var json = JSON.parse(resp.body);
@@ -73,13 +101,15 @@ function getOAuthToken() {
     return null;
 }
 
+/** A reddit API GET, bounded by REDDIT_TIMEOUT_MS - a stalled listing or comment response must
+ *  not hold a scan open for the client's 60s read timeout. */
 function fetchOAuth(url, token) {
     try {
         var resp = host.httpGet(url, {
             "User-Agent": OAUTH_UA,
             "Authorization": "Bearer " + token,
             "Accept": "application/json",
-        });
+        }, REDDIT_TIMEOUT_MS);
         if (resp.status < 200 || resp.status >= 300) {
             host.log("reddit: fetchOAuth status=" + resp.status + " url=" + url.substring(0,120));
             return null;
@@ -91,11 +121,16 @@ function fetchOAuth(url, token) {
     }
 }
 
+/** Harvests paste URLs out of [text] into [urlSet]. Returns how many matches were seen (not how
+ *  many were new) - discover() uses the count to tell whether a post's own selftext already
+ *  carried paste links, so its comment tree can be skipped. */
 function findPasteUrls(text, urlSet) {
     var m;
+    var found = 0;
     PASTE_URL_REGEX.lastIndex = 0;
     while ((m = PASTE_URL_REGEX.exec(text)) !== null) {
         urlSet[m[0]] = true;
+        found++;
     }
     BASE64_URL_REGEX.lastIndex = 0;
     while ((m = BASE64_URL_REGEX.exec(text)) !== null) {
@@ -104,6 +139,7 @@ function findPasteUrls(text, urlSet) {
             for (var i = 0; i < PASTE_DOMAINS.length; i++) {
                 if (decoded.indexOf(PASTE_DOMAINS[i]) !== -1) {
                     urlSet[decoded] = true;
+                    found++;
                     break;
                 }
             }
@@ -111,6 +147,7 @@ function findPasteUrls(text, urlSet) {
             // not valid base64 / not utf-8 - skip
         }
     }
+    return found;
 }
 
 function scrapeComments(children, urlSet) {
@@ -123,12 +160,40 @@ function scrapeComments(children, urlSet) {
     }
 }
 
-function fetchPostsOAuth(token, posts, urlSet) {
+/** Parses one already-fetched comment-tree response and harvests paste links from it. A parse
+ *  failure loses only this post's comments - the post itself was already scanned. */
+function scrapeCommentTree(jsonStr, urlSet) {
+    try {
+        var cArray = JSON.parse(jsonStr);
+        if (Array.isArray(cArray) && cArray.length > 1) {
+            var cChildren = cArray[1] && cArray[1].data && cArray[1].data.children;
+            if (cChildren) scrapeComments(cChildren, urlSet);
+        }
+    } catch (e) {
+        // comment tree parse failed - the post itself was already scanned
+    }
+}
+
+/** Walks the subreddit's /new listing (newest-first, `after`-chained) and harvests paste links
+ *  from post selftexts and comment trees.
+ *
+ *  Comment trees are fetched in BATCH_SIZE batches via host.httpGetAll instead of one blocking
+ *  GET per post - the old serial loop was the scan's dominant cost - and every request carries
+ *  REDDIT_TIMEOUT_MS so a stalled tree costs 12s, not the client's 60s read timeout.
+ *
+ *  Three bounds keep the phase inside `deadline` (the app kills discovery at 5 minutes):
+ *  MAX_COMMENT_FETCHES fetches overall (newest first - fresh posts carry pastes that still
+ *  work), SKIP_COMMENTS_WHEN_SELFTEXT_HAS_PASTES (one request not spent on reactions per
+ *  paste-bearing post), and MAX_COMMENT_429 (reddit rate-limiting the client means the rest
+ *  would come back empty too). */
+function fetchPostsOAuth(token, posts, urlSet, deadline) {
     var baseUrl = "https://oauth.reddit.com/r/" + SUBREDDIT + "/new?limit=100&sort=new&raw_json=1";
     var pageUrl = baseUrl;
     var now = Date.now();
     var kept = 0, ignored = 0, pages = 0, stoppedAtEdge = false;
+    var commentsIssued = 0, commentBatches = 0, comment429 = 0, commentsOff = false, budgetHit = false;
     while (pageUrl && pages < MAX_PAGES) {
+        if (Date.now() >= deadline) { budgetHit = true; break; }
         pages++;
         var jsonStr = fetchOAuth(pageUrl, token);
         if (!jsonStr) {
@@ -144,6 +209,7 @@ function fetchPostsOAuth(token, posts, urlSet) {
         }
         host.log("reddit: fetchPostsOAuth page " + pages + " - " + children.length + " children");
 
+        var commentPermalinks = [];
         for (var i = 0; i < children.length; i++) {
             var postData = children[i] && children[i].data;
             if (!postData) continue;
@@ -167,37 +233,73 @@ function fetchPostsOAuth(token, posts, urlSet) {
             posts.push({ id: id, title: title, selftext: selftext, permalink: fullPermalink });
             kept++;
 
-            findPasteUrls(title + " " + selftext, urlSet);
+            var selftextPastes = findPasteUrls(title + " " + selftext, urlSet);
 
-            try {
-                // Comments must be fetched through oauth.reddit.com, not www.reddit.com - the
-                // OAuth bearer token is only accepted on the API host, so this 403s on every
-                // single post otherwise (verified against real device logs: every comment fetch
-                // failed, silently, while everything else in the run succeeded).
-                var cJson = fetchOAuth("https://oauth.reddit.com" + permalink + ".json?raw_json=1", token);
-                if (cJson) {
-                    var cArray = JSON.parse(cJson);
-                    if (Array.isArray(cArray) && cArray.length > 1) {
-                        var cChildren = cArray[1] && cArray[1].data && cArray[1].data.children;
-                        if (cChildren) scrapeComments(cChildren, urlSet);
-                    }
-                }
-            } catch (e) {
-                // comment tree fetch/parse failed - the post itself was already scanned
+            if (!commentsOff && !(SKIP_COMMENTS_WHEN_SELFTEXT_HAS_PASTES && selftextPastes > 0)) {
+                commentPermalinks.push(permalink);
             }
         }
-        if (stoppedAtEdge) break;
+
+        // Comments must be fetched through oauth.reddit.com, not www.reddit.com - the OAuth
+        // bearer token is only accepted on the API host, so this 403s on every single post
+        // otherwise (verified against real device logs: every comment fetch failed, silently,
+        // while everything else in the run succeeded). Batched here: one httpGetAll pays roughly
+        // one request's latency for BATCH_SIZE posts instead of one latency per post.
+        for (var s = 0; s < commentPermalinks.length; s += BATCH_SIZE) {
+            if (commentsOff) break;
+            if (Date.now() >= deadline) { budgetHit = true; break; }
+            var count = Math.min(BATCH_SIZE, commentPermalinks.length - s, MAX_COMMENT_FETCHES - commentsIssued);
+            if (count <= 0) { commentsOff = true; break; }
+            var reqs = [];
+            for (var t = 0; t < count; t++) {
+                reqs.push({
+                    url: "https://oauth.reddit.com" + commentPermalinks[s + t] + ".json?raw_json=1",
+                    headers: { "User-Agent": OAUTH_UA, "Authorization": "Bearer " + token, "Accept": "application/json" },
+                    timeoutMs: REDDIT_TIMEOUT_MS,
+                });
+            }
+            commentsIssued += count;
+            commentBatches++;
+            var responses = host.httpGetAll(reqs);
+            var ok = 0, fail = 0;
+            for (var r = 0; r < responses.length; r++) {
+                var resp = responses[r] || { status: 0, body: "" };
+                if (resp.status >= 200 && resp.status < 300) {
+                    ok++;
+                    scrapeCommentTree(resp.body, urlSet);
+                } else {
+                    fail++;
+                    if (resp.status === 429) comment429++;
+                }
+            }
+            if (fail > 0) {
+                host.log("reddit: comment batch " + commentBatches + " - ok=" + ok + " fail=" + fail + " (429s so far: " + comment429 + ")");
+            }
+            if (comment429 >= MAX_COMMENT_429) {
+                commentsOff = true;
+                host.log("reddit: comment fetching abandoned - " + comment429 + " throttled (429) responses");
+            }
+        }
+        if (stoppedAtEdge || budgetHit) break;
         pageUrl = listing.after ? baseUrl + "&after=" + encodeURIComponent(listing.after) : null;
     }
-    host.log("reddit: fetchPostsOAuth - pages=" + pages + " kept=" + kept + " ignored=" + ignored + (stoppedAtEdge ? " (stopped at window edge)" : "") + " urlsSoFar=" + Object.keys(urlSet).length);
+    host.log("reddit: fetchPostsOAuth - pages=" + pages + " kept=" + kept + " ignored=" + ignored
+        + " comments=" + commentsIssued + " batches=" + commentBatches + " throttled=" + comment429
+        + (stoppedAtEdge ? " (stopped at window edge)" : "")
+        + (budgetHit ? " (scan budget reached)" : "")
+        + (commentsOff ? " (comments off)" : "")
+        + " urlsSoFar=" + Object.keys(urlSet).length);
 }
 
 function redditScan() {
     var posts = [];
     var urlSet = {};
     try {
+        // Measured from before the token fetch: the whole scan phase (OAuth, listings, comment
+        // batches) shares one wall-clock budget so the provider testing always gets the rest.
+        var deadline = Date.now() + SCAN_BUDGET_MS;
         var token = getOAuthToken();
-        if (token) fetchPostsOAuth(token, posts, urlSet);
+        if (token) fetchPostsOAuth(token, posts, urlSet, deadline);
     } catch (e) {
         // fall through with whatever was collected before the failure
     }
@@ -214,27 +316,32 @@ function redditScan() {
 
 var ONE_AS_INT32BE_B64 = "AAAAAQ=="; // base64 of the 4 bytes [0,0,0,1]
 
-function pasteShDecrypt(pasteUrl) {
-    try {
-        var hashIdx = pasteUrl.indexOf("#");
-        if (hashIdx <= 0) {
-            host.log("reddit: pasteShDecrypt no hash in url=" + pasteUrl.substring(0, 80));
-            return null;
-        }
-        var baseUrl = pasteUrl.substring(0, hashIdx);
-        var clientKey = pasteUrl.substring(hashIdx + 1);
-        var pasteId = baseUrl.substring(baseUrl.lastIndexOf("/") + 1);
-        if (!pasteId) {
-            host.log("reddit: pasteShDecrypt no pasteId from " + pasteUrl.substring(0, 80));
-            return null;
-        }
+/** The fetch half of a paste.sh paste: the .txt URL plus what the decrypt half needs, or null
+ *  when the URL carries no key. Split from decryption so the fetch can ride discover()'s batched
+ *  pass - the old one-blocking-GET-per-paste loop was one of the scan's two serial bottlenecks. */
+function pasteShPlan(pasteUrl) {
+    var hashIdx = pasteUrl.indexOf("#");
+    if (hashIdx <= 0) {
+        host.log("reddit: pasteShDecrypt no hash in url=" + pasteUrl.substring(0, 80));
+        return null;
+    }
+    var baseUrl = pasteUrl.substring(0, hashIdx);
+    var clientKey = pasteUrl.substring(hashIdx + 1);
+    var pasteId = baseUrl.substring(baseUrl.lastIndexOf("/") + 1);
+    if (!pasteId) {
+        host.log("reddit: pasteShDecrypt no pasteId from " + pasteUrl.substring(0, 80));
+        return null;
+    }
+    return { url: baseUrl + ".txt", clientKey: clientKey, pasteId: pasteId };
+}
 
-        var resp = host.httpGet(baseUrl + ".txt", { "User-Agent": "Mozilla/5.0", "Accept": "text/plain,*/*" });
-        if (resp.status < 200 || resp.status >= 300) {
-            host.log("reddit: pasteShDecrypt fetch status=" + resp.status + " for " + pasteId);
-            return null;
-        }
-        var lines = resp.body.split("\n");
+/** The decrypt half of a paste.sh paste; [body] is what [pasteShPlan]'s URL returned. Log lines
+ *  keep the "pasteShDecrypt" prefix so existing device logs stay greppable. */
+function pasteShDecryptBody(plan, body) {
+    var pasteId = plan.pasteId;
+    var clientKey = plan.clientKey;
+    try {
+        var lines = body.split("\n");
         var firstLine = (lines[0] || "").trim();
         var b64Ciphertext, passwordB64;
 
@@ -298,7 +405,7 @@ function pasteShDecrypt(pasteUrl) {
             }
         }
     } catch (e) {
-        host.log("reddit: pasteShDecrypt threw: " + (e.message || e) + " for " + pasteUrl.substring(0, 60));
+        host.log("reddit: pasteShDecrypt threw: " + (e.message || e) + " for " + pasteId);
         return null;
     }
 }
@@ -325,27 +432,19 @@ function pasteId(url) {
     return hashIdx !== -1 ? u.substring(0, hashIdx) : u;
 }
 
-function fetchPaste(url) {
-    try {
-        var actualUrl = url;
-        if (url.indexOf("pastebin.com/") !== -1 && url.indexOf("/raw") === -1) {
-            actualUrl = "https://pastebin.com/raw/" + pasteId(url);
-        } else if (url.indexOf("rentry.co/") !== -1 && url.indexOf("/raw") === -1) {
-            actualUrl = "https://rentry.co/" + pasteId(url) + "/raw";
-        } else if (url.indexOf("pastes.dev/") !== -1) {
-            actualUrl = "https://api.pastes.dev/" + pasteId(url);
-        }
-        var resp = host.httpGet(actualUrl, { "User-Agent": "Mozilla/5.0", "Accept": "text/plain,text/html,*/*" });
-        if (resp.status < 200 || resp.status >= 300) {
-            host.log("reddit: fetchPaste status=" + resp.status + " url=" + actualUrl.substring(0, 100));
-            return null;
-        }
-        host.log("reddit: fetchPaste OK status=" + resp.status + " len=" + (resp.body || "").length + " url=" + actualUrl.substring(0, 80));
-        return resp.body;
-    } catch (e) {
-        host.log("reddit: fetchPaste threw: " + (e.message || e) + " url=" + url.substring(0, 80));
-        return null;
+/** Where a paste URL's raw text actually lives - pastebin/rentry need their raw path, pastes.dev
+ *  its API host. The fetch itself happens in discover()'s batched pass, not here. */
+function resolvePasteFetchUrl(url) {
+    if (url.indexOf("pastebin.com/") !== -1 && url.indexOf("/raw") === -1) {
+        return "https://pastebin.com/raw/" + pasteId(url);
     }
+    if (url.indexOf("rentry.co/") !== -1 && url.indexOf("/raw") === -1) {
+        return "https://rentry.co/" + pasteId(url) + "/raw";
+    }
+    if (url.indexOf("pastes.dev/") !== -1) {
+        return "https://api.pastes.dev/" + pasteId(url);
+    }
+    return url;
 }
 
 // ── Credential parsing ──
@@ -664,17 +763,58 @@ function discover(host) {
     for (var d in domainCounts) domainSummary += d + "=" + domainCounts[d] + " ";
     host.log("reddit: pasteDomains " + domainSummary);
 
-    var contents = [];
+    // Fetch paste bodies in BATCH_SIZE batches (host.httpGetAll) - the old one-blocking-GET-per-
+    // paste loop was the scan's other serial bottleneck, and every request carries
+    // PASTE_TIMEOUT_MS so a dead paste host costs 15s, not the client's 60s read timeout. The
+    // paste.sh decrypt half (pasteShDecryptBody) reuses the body fetched here. Fetch order is the
+    // scan's own (newest posts first), so the MAX_PASTE_URLS cap keeps the freshest pastes; the
+    // rest are never fetched. The whole phase shares PASTE_BUDGET_MS.
+    var jobs = [];
     for (var i = 0; i < scan.pasteUrls.length; i++) {
+        if (jobs.length >= MAX_PASTE_URLS) break;
         var url = scan.pasteUrls[i];
-        host.reportProgress("Fetching paste " + (i + 1) + "/" + scan.pasteUrls.length + "…");
-        var content = null;
-        try {
-            content = url.indexOf("paste.sh/") !== -1 && url.indexOf("#") !== -1 ? pasteShDecrypt(url) : fetchPaste(url);
-        } catch (e) {
-            // this paste failed to fetch/decrypt - keep going with the rest
+        if (url.indexOf("paste.sh/") !== -1 && url.indexOf("#") !== -1) {
+            var plan = pasteShPlan(url);
+            if (plan) jobs.push({ plan: plan, fetchUrl: plan.url, source: url });
+        } else {
+            jobs.push({ plan: null, fetchUrl: resolvePasteFetchUrl(url), source: url });
         }
-        if (content) contents.push(content);
+    }
+    if (scan.pasteUrls.length > jobs.length) {
+        host.log("reddit: paste cap - skipping " + (scan.pasteUrls.length - jobs.length) + " paste(s) past " + MAX_PASTE_URLS);
+    }
+
+    var contents = [];
+    var pasteDeadline = Date.now() + PASTE_BUDGET_MS;
+    for (var s = 0; s < jobs.length; s += BATCH_SIZE) {
+        if (Date.now() >= pasteDeadline) {
+            host.log("reddit: paste budget reached - fetched " + s + "/" + jobs.length + ", moving on");
+            break;
+        }
+        var count = Math.min(BATCH_SIZE, jobs.length - s);
+        host.reportProgress("Fetching pastes " + (s + 1) + "-" + (s + count) + "/" + jobs.length + "…");
+        var reqs = [];
+        for (var t = 0; t < count; t++) {
+            reqs.push({
+                url: jobs[s + t].fetchUrl,
+                headers: { "User-Agent": "Mozilla/5.0", "Accept": "text/plain,text/html,*/*" },
+                timeoutMs: PASTE_TIMEOUT_MS,
+            });
+        }
+        var responses = host.httpGetAll(reqs);
+        var ok = 0, fail = 0;
+        for (var r = 0; r < count; r++) {
+            var resp = responses[r] || { status: 0, body: "" };
+            if (resp.status < 200 || resp.status >= 300) {
+                fail++;
+                host.log("reddit: paste fetch status=" + resp.status + " url=" + jobs[s + r].fetchUrl.substring(0, 80));
+                continue;
+            }
+            ok++;
+            var content = jobs[s + r].plan ? pasteShDecryptBody(jobs[s + r].plan, resp.body) : resp.body;
+            if (content) contents.push(content);
+        }
+        if (fail > 0) host.log("reddit: paste batch ok=" + ok + " fail=" + fail);
     }
 
     host.reportProgress("Parsing credentials…");
