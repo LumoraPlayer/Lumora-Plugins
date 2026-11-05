@@ -14,6 +14,15 @@ PLUGIN = {
 var SUBREDDIT = "IPTV_ZONENEW";
 var CLIENT_IDS = ["ohXpoqrZYub1kg", "NOe2iKrPPzwscA"];
 var OAUTH_UA = "RedditScanPlugin/1.0";
+// The JSON/OAuth listing is the primary path, but Reddit has been answering the installed-client
+// grant with 403 while the public Atom feed still serves the same newest-first posts. Keep the
+// browser-shaped UA for the feed: it is a web endpoint, not the API, and Reddit's bot filter
+// rejects the API UA there.
+var RSS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var RSS_URL = "https://www.reddit.com/r/" + SUBREDDIT + "/new/.rss?limit=100";
+// HTTP status of the last OAuth listing attempt, so discover() can say "blocked" instead of the
+// old indistinguishable "No paste links found" when Reddit refuses both paths.
+var lastOAuthListingStatus = 0;
 var MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 // The /new listing is newest-first; pages are chained via its `after` cursor only until a
 // non-stickied post outside the 14-day window shows up. MAX_PAGES is the hard ceiling for a
@@ -111,6 +120,7 @@ function fetchOAuth(url, token) {
             "Accept": "application/json",
         }, REDDIT_TIMEOUT_MS);
         if (resp.status < 200 || resp.status >= 300) {
+            lastOAuthListingStatus = resp.status || 0;
             host.log("reddit: fetchOAuth status=" + resp.status + " url=" + url.substring(0,120));
             return null;
         }
@@ -291,19 +301,160 @@ function fetchPostsOAuth(token, posts, urlSet, deadline) {
         + " urlsSoFar=" + Object.keys(urlSet).length);
 }
 
+/**
+ * Reddit's public Atom feed is the fallback when the OAuth listing is refused. It carries the
+ * same newest-first posts (title, link and escaped HTML body) but no comments, so only the
+ * selftext pastes are harvested - which is where this subreddit puts its credentials anyway.
+ *
+ * The feed is XML, not JSON, and the QuickJS build has no DOMParser: these helpers pull the
+ * handful of tags the scan needs with regular expressions. Every value is XML-decoded before
+ * it is used, because the feed escapes its HTML body (`&lt;p&gt;...`) and paste URLs inside it
+ * would otherwise never match.
+ */
+function decodeXmlEntities(value) {
+    return (value || "")
+        .replace(/&#x([0-9a-f]+);/gi, function (_, hex) { return String.fromCharCode(parseInt(hex, 16)); })
+        .replace(/&#([0-9]+);/g, function (_, dec) { return String.fromCharCode(parseInt(dec, 10)); })
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, "&");
+}
+
+function rssTag(entry, tag) {
+    var match = new RegExp("<" + tag + "(?:\\s[^>]*)?>([\\s\\S]*?)<\\/" + tag + ">", "i").exec(entry);
+    return match ? match[1] : "";
+}
+
+/** The post body as plain text: decode the XML layer, then drop the HTML tags the feed wraps it in. */
+function rssText(html) {
+    return decodeXmlEntities(html)
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(?:p|div|li|tr)>/gi, "\n")
+        .replace(/<[^>]*>/g, " ");
+}
+
+/** Atom timestamps are ISO-8601; parse them without relying on Date.parse's implementation. */
+function rssDate(raw) {
+    var match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(raw || "");
+    if (!match) return 0;
+    return Date.UTC(
+        parseInt(match[1], 10), parseInt(match[2], 10) - 1, parseInt(match[3], 10),
+        parseInt(match[4], 10), parseInt(match[5], 10), parseInt(match[6], 10)
+    );
+}
+
+function parseRssEntries(xml) {
+    var entries = [];
+    var re = /<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/g;
+    var match;
+    while ((match = re.exec(xml)) !== null) {
+        var entry = match[1];
+        var fullname = decodeXmlEntities(rssTag(entry, "id")).trim();
+        var link = /<link[^>]*href="([^"]+)"/i.exec(entry);
+        entries.push({
+            id: fullname.replace(/^t3_/, ""),
+            fullname: fullname,
+            title: decodeXmlEntities(rssTag(entry, "title")).trim(),
+            permalink: link ? decodeXmlEntities(link[1]) : "",
+            created: rssDate(rssTag(entry, "published") || rssTag(entry, "updated")),
+            selftext: rssText(rssTag(entry, "content")),
+        });
+    }
+    return entries;
+}
+
+/**
+ * Walks the Atom feed newest-first and harvests paste links from each post's title and body.
+ * `after` is the last entry's fullname, so the feed pages the same way the JSON listing did.
+ * A page with no post inside MAX_AGE_MS ends the walk: older pages only get older.
+ */
+function fetchPostsRss(posts, urlSet, deadline) {
+    var pageUrl = RSS_URL;
+    var now = Date.now();
+    var pages = 0, kept = 0, ignored = 0, fetched = 0, budgetHit = false, firstStatus = 0;
+    var seen = {};
+    while (pageUrl && pages < MAX_PAGES) {
+        if (Date.now() >= deadline) { budgetHit = true; break; }
+        pages++;
+        var resp = host.httpGet(pageUrl, {
+            "User-Agent": RSS_UA,
+            "Accept": "application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
+        }, REDDIT_TIMEOUT_MS);
+        var status = (resp && resp.status) || 0;
+        if (pages === 1) firstStatus = status;
+        if (status < 200 || status >= 300) {
+            host.log("reddit: RSS status=" + status + " page=" + pages);
+            break;
+        }
+        var entries = parseRssEntries(resp.body || "");
+        if (entries.length === 0) break;
+        var freshOnPage = 0;
+        for (var i = 0; i < entries.length; i++) {
+            var entry = entries[i];
+            if (!entry.fullname || seen[entry.fullname]) continue;
+            seen[entry.fullname] = true;
+            fetched++;
+            if (!entry.id || !entry.permalink) continue;
+            if (entry.created && now - entry.created > MAX_AGE_MS) {
+                ignored++;
+                continue;
+            }
+            freshOnPage++;
+            posts.push({
+                id: entry.id,
+                title: entry.title,
+                selftext: entry.selftext,
+                permalink: entry.permalink,
+            });
+            findPasteUrls(entry.title + " " + entry.selftext, urlSet);
+            kept++;
+        }
+        host.log("reddit: RSS page " + pages + " entries=" + entries.length + " fresh=" + freshOnPage
+            + " kept=" + kept + " urls=" + Object.keys(urlSet).length);
+        if (freshOnPage === 0) break;
+        var lastFullname = entries[entries.length - 1].fullname;
+        pageUrl = lastFullname
+            ? RSS_URL + "&after=" + encodeURIComponent(lastFullname) + "&count=" + fetched
+            : null;
+    }
+    host.log("reddit: fetchPostsRss - pages=" + pages + " kept=" + kept + " ignored=" + ignored
+        + (budgetHit ? " (scan budget reached)" : "")
+        + " urlsSoFar=" + Object.keys(urlSet).length);
+    return { ok: firstStatus >= 200 && firstStatus < 300, status: firstStatus };
+}
+
 function redditScan() {
     var posts = [];
     var urlSet = {};
+    var error = null;
+    var rssStatus = 0;
     try {
         // Measured from before the token fetch: the whole scan phase (OAuth, listings, comment
-        // batches) shares one wall-clock budget so the provider testing always gets the rest.
+        // batches, RSS fallback) shares one wall-clock budget so provider testing gets the rest.
         var deadline = Date.now() + SCAN_BUDGET_MS;
         var token = getOAuthToken();
         if (token) fetchPostsOAuth(token, posts, urlSet, deadline);
+        // Reddit has answered the OAuth listing with 403 for every installed-client app; the
+        // public feed still works. Only fall back when the API produced nothing, so a healthy
+        // OAuth run never pays for a second listing.
+        if (posts.length === 0) {
+            host.reportProgress("Reddit API unavailable - trying the public RSS feed…");
+            var rss = fetchPostsRss(posts, urlSet, deadline);
+            rssStatus = rss.status;
+        }
     } catch (e) {
         // fall through with whatever was collected before the failure
     }
-    return { posts: posts, pasteUrls: Object.keys(urlSet) };
+    if (posts.length === 0) {
+        if (lastOAuthListingStatus === 403 || rssStatus === 403) {
+            error = "Reddit blocked the scan (HTTP 403) - no paste links found";
+        } else if (lastOAuthListingStatus === 429 || rssStatus === 429) {
+            error = "Reddit rate-limited the scan (HTTP 429) - try again later";
+        }
+    }
+    return { posts: posts, pasteUrls: Object.keys(urlSet), error: error };
 }
 
 // ── paste.sh decryption ──
@@ -802,7 +953,7 @@ function discover(host) {
         host.log("redditscan: scan threw: " + (e.message || e));
         return "Reddit scan failed";
     }
-    if (scan.pasteUrls.length === 0) return "No paste links found";
+    if (scan.pasteUrls.length === 0) return scan.error || "No paste links found";
     host.reportProgress("Found " + scan.posts.length + " posts, " + scan.pasteUrls.length + " paste links");
 
     // Log paste URL breakdown by domain
