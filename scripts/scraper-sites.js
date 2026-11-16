@@ -51,7 +51,7 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 6;
+var VERSION = 7;
 
 var SITES = [
     { name: "AfterDark", language: "en", enabled: false, note: "baseUrl not yet known - fill in before enabling.", baseUrl: "", extra: { logo: "https://images2.imgbox.com/f5/45/6Es7LVQ6_o.png" } },
@@ -121,11 +121,33 @@ var SITES = [
     { name: "TvporinternetHD", language: "es", enabled: false, note: "Live TV channels only - cannot source a film or episode.", baseUrl: "https://www.tvporinternet2.com", extra: { mirrorReferer: "https://www.tvporinternet2.com/" } },
     { name: "Wiflix", language: "fr", enabled: true, baseUrl: "https://flemmix.team/", extra: { portalUrl: "https://ww1.wiflix-adresses.fun/" } },
     { name: "Zaluknij", language: "pl", enabled: true, baseUrl: "https://zaluknij.cc", heavy: true },
-    { name: NetPrime, language: en, enabled: true, baseUrl: https://netprime.gd },
-    { name: euroStreaming, language: it, enabled: true, baseUrl: https://eurostream.fun },
-    { name: Filmo, language: de, enabled: true, baseUrl: https://filmo.to },
-    { name: Kellerkino, language: de, enabled: true, baseUrl: https://www.kellerkino.com },
-    { name: KinoGer, language: de, enabled: true, baseUrl: https://kinoger.beer },
+    { name: "NetPrime", language: "en", enabled: true, baseUrl: "https://netprime.gd" },
+    { name: "euroStreaming", language: "it", enabled: true, baseUrl: "https://eurostream.fun" },
+    { name: "Filmo", language: "de", enabled: true, baseUrl: "https://filmo.to" },
+    { name: "Kellerkino", language: "de", enabled: true, baseUrl: "https://www.kellerkino.com" },
+    { name: "KinoGer", language: "de", enabled: true, baseUrl: "https://kinoger.beer" },
+
+    // TMDB-id resolvers ported from VyseTV's public source list. They keep no catalogue of
+    // their own: the app asks TMDB for the title, then these sites for its streams.
+    { name: "111477", language: "en", enabled: true, baseUrl: "https://st.111477.xyz", extra: { configUrl: "https://a.111477.xyz/::sort=file-desc::limit=3" } },
+    { name: "3EyedRaven", language: "en", enabled: true, baseUrl: "https://3eyedraven.watch" },
+    { name: "BraFlix", language: "en", enabled: true, baseUrl: "https://braflix.dev" },
+    { name: "CineBros", language: "en", enabled: true, baseUrl: "https://cinebros.net" },
+    { name: "CNO", language: "en", enabled: true, baseUrl: "https://cno.to" },
+    { name: "FrameXTV", language: "en", enabled: true, baseUrl: "https://framextv.cc", extra: { apiUrl: "https://api.framextv.cc", relayUrl: "https://api.streamos.top" } },
+    { name: "MovieBox", language: "en", enabled: true, baseUrl: "https://net79.cc" },
+    { name: "PurStream", language: "en", enabled: true, baseUrl: "https://purstream.ad", extra: { apiUrl: "https://api.purstream.ad/api/v1" } },
+    { name: "RiveStream", language: "en", enabled: true, baseUrl: "https://www.rivestream.app" },
+    { name: "ThugTV", language: "en", enabled: true, baseUrl: "https://thugtv.online", extra: { apiUrl: "https://api.thugtv.online/api" } },
+    { name: "VidBolt", language: "en", enabled: true, baseUrl: "https://vidbolt.xyz" },
+    { name: "VidCore", language: "en", enabled: true, baseUrl: "https://vidcore.io" },
+    { name: "VidLink", language: "en", enabled: true, baseUrl: "https://vidlink.pro" },
+    { name: "VidLux", language: "en", enabled: true, baseUrl: "https://vidlux.xyz" },
+    { name: "VidSpark", language: "en", enabled: true, baseUrl: "https://vidspark.to" },
+    { name: "VidUp", language: "en", enabled: true, baseUrl: "https://vidup.to" },
+    { name: "VixSrc", language: "en", enabled: true, baseUrl: "https://vixsrc.to" },
+    { name: "WatchOut", language: "en", enabled: true, baseUrl: "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main/hls" },
+    { name: "Willow", language: "en", enabled: true, baseUrl: "https://willowmovies.com" },
 ];
 
 // The host reads this back as a JSON string: it crosses the bridge once, deterministically,
