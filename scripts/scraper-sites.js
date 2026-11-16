@@ -51,7 +51,7 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 8;
+var VERSION = 9;
 
 var SITES = [
     { name: "AfterDark", language: "en", enabled: false, note: "baseUrl not yet known - fill in before enabling.", baseUrl: "", extra: { logo: "https://images2.imgbox.com/f5/45/6Es7LVQ6_o.png" } },
@@ -127,10 +127,9 @@ var SITES = [
     { name: "Kellerkino", language: "de", enabled: true, baseUrl: "https://www.kellerkino.com" },
     { name: "KinoGer", language: "de", enabled: true, baseUrl: "https://kinoger.beer" },
 
-    // TMDB-id resolvers ported from VyseTV's public source list. They keep no catalogue of
+    // TMDB-id resolvers from the public source list. They keep no catalogue of
     // their own: the app asks TMDB for the title, then these sites for its streams.
     { name: "111477", language: "en", enabled: true, baseUrl: "https://st.111477.xyz", extra: { configUrl: "https://a.111477.xyz/::sort=file-desc::limit=3" } },
-    { name: "3EyedRaven", language: "en", enabled: true, baseUrl: "https://3eyedraven.watch" },
     { name: "BraFlix", language: "en", enabled: true, baseUrl: "https://braflix.dev" },
     { name: "CineBros", language: "en", enabled: true, baseUrl: "https://cinebros.net" },
     { name: "CNO", language: "en", enabled: true, baseUrl: "https://cno.to" },
@@ -140,23 +139,19 @@ var SITES = [
     { name: "RiveStream", language: "en", enabled: true, baseUrl: "https://www.rivestream.app" },
     { name: "ThugTV", language: "en", enabled: true, baseUrl: "https://thugtv.online", extra: { apiUrl: "https://api.thugtv.online/api" } },
     { name: "VidBolt", language: "en", enabled: true, baseUrl: "https://vidbolt.xyz" },
-    { name: "VidCore", language: "en", enabled: true, baseUrl: "https://vidcore.io" },
     { name: "VidLink", language: "en", enabled: true, baseUrl: "https://vidlink.pro" },
-    { name: "VidLux", language: "en", enabled: true, baseUrl: "https://vidlux.xyz" },
     { name: "VidSpark", language: "en", enabled: true, baseUrl: "https://vidspark.to" },
     { name: "VidUp", language: "en", enabled: true, baseUrl: "https://vidup.to" },
     { name: "VixSrc", language: "en", enabled: true, baseUrl: "https://vixsrc.to" },
     { name: "WatchOut", language: "en", enabled: true, baseUrl: "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main/hls" },
     { name: "Willow", language: "en", enabled: true, baseUrl: "https://willowmovies.com" },
 
-    // The heavier protocols: cookie sessions, proof-of-work challenges and Astro/Next.js data
+    // The heavier protocols: cookie sessions, proof-of-work challenges and Astro island data
     // embedded in pages.
     { name: "LookMovie", language: "en", enabled: true, baseUrl: "https://www.lookmovie2.to", extra: { mirrors: "https://www.lookmovie2.to,https://lookmovie2.to,https://lookmovie.foundation" } },
     { name: "VidVault", language: "en", enabled: true, baseUrl: "https://vidvault.to" },
     { name: "TrendiMovies", language: "en", enabled: true, baseUrl: "https://trendimovies.com" },
     { name: "Mapple", language: "en", enabled: true, baseUrl: "https://mapple.fun" },
-    { name: "Hexa", language: "en", enabled: true, baseUrl: "https://theemoviedb.hexa.su" },
-    { name: "CineSrc", language: "en", enabled: true, baseUrl: "https://cinesrc.st" },
     { name: "AniZone", language: "en", enabled: true, baseUrl: "https://anizone.to", anime: true },
     { name: "ANV", language: "en", enabled: true, baseUrl: "https://anv.to", anime: true },
     { name: "123Anime", language: "en", enabled: true, baseUrl: "https://123animehub.cc", anime: true },
