@@ -51,7 +51,7 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 9;
+var VERSION = 10;
 
 var SITES = [
     { name: "AfterDark", language: "en", enabled: false, note: "baseUrl not yet known - fill in before enabling.", baseUrl: "", extra: { logo: "https://images2.imgbox.com/f5/45/6Es7LVQ6_o.png" } },
@@ -130,6 +130,7 @@ var SITES = [
     // TMDB-id resolvers from the public source list. They keep no catalogue of
     // their own: the app asks TMDB for the title, then these sites for its streams.
     { name: "111477", language: "en", enabled: true, baseUrl: "https://st.111477.xyz", extra: { configUrl: "https://a.111477.xyz/::sort=file-desc::limit=3" } },
+    { name: "3EyedRaven", language: "en", enabled: true, baseUrl: "https://3eyedraven.watch" },
     { name: "BraFlix", language: "en", enabled: true, baseUrl: "https://braflix.dev" },
     { name: "CineBros", language: "en", enabled: true, baseUrl: "https://cinebros.net" },
     { name: "CNO", language: "en", enabled: true, baseUrl: "https://cno.to" },
@@ -139,7 +140,9 @@ var SITES = [
     { name: "RiveStream", language: "en", enabled: true, baseUrl: "https://www.rivestream.app" },
     { name: "ThugTV", language: "en", enabled: true, baseUrl: "https://thugtv.online", extra: { apiUrl: "https://api.thugtv.online/api" } },
     { name: "VidBolt", language: "en", enabled: true, baseUrl: "https://vidbolt.xyz" },
+    { name: "VidCore", language: "en", enabled: true, baseUrl: "https://vidcore.io" },
     { name: "VidLink", language: "en", enabled: true, baseUrl: "https://vidlink.pro" },
+    { name: "VidLux", language: "en", enabled: true, baseUrl: "https://vidlux.xyz" },
     { name: "VidSpark", language: "en", enabled: true, baseUrl: "https://vidspark.to" },
     { name: "VidUp", language: "en", enabled: true, baseUrl: "https://vidup.to" },
     { name: "VixSrc", language: "en", enabled: true, baseUrl: "https://vixsrc.to" },
