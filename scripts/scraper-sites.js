@@ -51,7 +51,7 @@ PLUGIN = {
     capabilities: ["scraper_sites"],
 };
 
-var VERSION = 7;
+var VERSION = 8;
 
 var SITES = [
     { name: "AfterDark", language: "en", enabled: false, note: "baseUrl not yet known - fill in before enabling.", baseUrl: "", extra: { logo: "https://images2.imgbox.com/f5/45/6Es7LVQ6_o.png" } },
@@ -148,6 +148,18 @@ var SITES = [
     { name: "VixSrc", language: "en", enabled: true, baseUrl: "https://vixsrc.to" },
     { name: "WatchOut", language: "en", enabled: true, baseUrl: "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main/hls" },
     { name: "Willow", language: "en", enabled: true, baseUrl: "https://willowmovies.com" },
+
+    // The heavier protocols: cookie sessions, proof-of-work challenges and Astro/Next.js data
+    // embedded in pages.
+    { name: "LookMovie", language: "en", enabled: true, baseUrl: "https://www.lookmovie2.to", extra: { mirrors: "https://www.lookmovie2.to,https://lookmovie2.to,https://lookmovie.foundation" } },
+    { name: "VidVault", language: "en", enabled: true, baseUrl: "https://vidvault.to" },
+    { name: "TrendiMovies", language: "en", enabled: true, baseUrl: "https://trendimovies.com" },
+    { name: "Mapple", language: "en", enabled: true, baseUrl: "https://mapple.fun" },
+    { name: "Hexa", language: "en", enabled: true, baseUrl: "https://theemoviedb.hexa.su" },
+    { name: "CineSrc", language: "en", enabled: true, baseUrl: "https://cinesrc.st" },
+    { name: "AniZone", language: "en", enabled: true, baseUrl: "https://anizone.to", anime: true },
+    { name: "ANV", language: "en", enabled: true, baseUrl: "https://anv.to", anime: true },
+    { name: "123Anime", language: "en", enabled: true, baseUrl: "https://123animehub.cc", anime: true },
 ];
 
 // The host reads this back as a JSON string: it crosses the bridge once, deterministically,
